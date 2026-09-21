@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>reel example — explainer (light)</title>
+  <!-- 浅色讲解样例：只示范契约 + captions/chapters，不是默认皮肤。 -->
+  <script>
+    window.REEL = {
+      duration: 8,
+      fps: 30,
+      width: 1280,
+      height: 720,
+      captions: [
+        { t: [0.3, 2.4], text: "每个词同时看整句，而不是从左读到右" },
+        { t: [2.4, 5.2], text: "Query 去问，Key 来应，Value 带走内容" },
+        { t: [5.2, 8.0], text: "对齐分数决定这条内容被拿走多少" }
+      ],
+      chapters: [
+        { t: 0, title: "并行" },
+        { t: 2.4, title: "Q · K · V" },
+        { t: 5.2, title: "对齐" }
+      ]
+    };
+  </script>
+  <style>
+    html, body { margin: 0; background: #efe8dc; }
+    .stage {
+      position: relative;
+      width: 1280px;
+      height: 720px;
+      overflow: hidden;
+      color: #1c1916;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", serif;
+      background: #efe8dc;
+      --reel-caption-fg: #1c1916;
+      --reel-bar-fill: #c45c26;
+      --reel-bar-track: rgba(28, 25, 22, 0.12);
+    }
+    .kicker {
+      position: absolute;
+      left: 80px;
+      top: 56px;
+      margin: 0;
+      font: 600 13px/1 system-ui, sans-serif;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #c45c26;
+      opacity: 0;
+      animation: fade 500ms 120ms both;
+    }
+    h1 {
+      position: absolute;
+      left: 80px;
+      top: 84px;
+      margin: 0;
+      font-size: 44px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      opacity: 0;
+      animation: fade 600ms 240ms both;
+    }
+    .row {
+      position: absolute;
+      left: 80px;
+      right: 80px;
+      top: 210px;
+      display: flex;
+      gap: 28px;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+    }
+    .box {
+      width: 220px;
+      height: 220px;
+      border: 2px solid #1c1916;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #f7f1e6;
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    .box b {
+      font-size: 64px;
+      font-weight: 650;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+    .box span {
+      margin-top: 10px;
+      font: 500 15px/1 system-ui, sans-serif;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #6b645c;
+    }
+    .q { animation: rise 520ms 400ms both; }
+    .k { animation: rise 520ms 700ms both; }
+    .v { animation: rise 520ms 1000ms both; }
+    svg.wires {
+      position: absolute;
+      left: 80px;
+      top: 210px;
+      width: 1120px;
+      height: 220px;
+      pointer-events: none;
+      z-index: 0;
+    }
+    #score {
+      position: absolute;
+      left: 80px;
+      right: 80px;
+      top: 470px;
+      text-align: center;
+      font: 500 28px/1.2 "Iowan Old Style", Palatino, serif;
+      font-variant-numeric: tabular-nums;
+    }
+    @keyframes fade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <p class="kicker">Attention · one idea</p>
+    <h1>Transformer 在做什么</h1>
+    <div class="row">
+      <div class="box q"><b>Q</b><span>Query</span></div>
+      <div class="box k"><b>K</b><span>Key</span></div>
+      <div class="box v"><b>V</b><span>Value</span></div>
+    </div>
+    <svg class="wires" viewBox="0 0 1120 220" fill="none">
+      <path id="qk" d="M312 110 H560" stroke="#1c1916" stroke-width="2" stroke-dasharray="248" stroke-dashoffset="248" />
+      <path id="kv" d="M560 110 H808" stroke="#c45c26" stroke-width="2" stroke-dasharray="248" stroke-dashoffset="248" />
+    </svg>
+    <div id="score"></div>
+  </div>
+  <script>
+    function reelDraw(t) {
+      var r = window.reel;
+      if (!r) return;
+      var qk = document.getElementById("qk");
+      var kv = document.getElementById("kv");
+      var score = document.getElementById("score");
+      var u1 = r.span(t, 2.5, 4.2);
+      var u2 = r.span(t, 5.2, 7.0);
+      qk.style.strokeDashoffset = String(248 * (1 - r.easeOut(u1)));
+      kv.style.strokeDashoffset = String(248 * (1 - r.easeOut(u2)));
+      if (t < 5.2) score.textContent = "";
+      else score.textContent = "softmax(QKᵀ) · V  →  " + (r.easeOut(u2) * 100).toFixed(0) + "%";
+    }
+  </script>
+</body>
+</html>

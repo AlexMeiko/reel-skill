@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reel 控制面板</title>
+  <style>
+    :root {
+      --bg: #0b0c0f;
+      --panel: #14161b;
+      --line: #2a2e36;
+      --text: #e8eaed;
+      --muted: #8b909a;
+      --accent: #8ab4ff;
+      --fill: #1c212b;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.4 system-ui, "PingFang SC", "Noto Sans SC", sans-serif;
+    }
+    body {
+      display: grid;
+      grid-template-rows: 48px minmax(0, 1fr) auto;
+      height: 100%;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      position: relative;
+      z-index: 2;
+    }
+    header .brand {
+      font-weight: 650;
+      letter-spacing: 0.12em;
+      font-size: 12px;
+    }
+    header .meta { color: var(--muted); }
+    .live {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+    }
+    .live.on { color: #7ee0c3; }
+    header select {
+      margin-left: auto;
+      background: var(--fill);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 10px;
+      max-width: 42vw;
+    }
+    .viewport-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+      z-index: 0;
+      background:
+        radial-gradient(800px 400px at 80% 0%, rgba(138, 180, 255, 0.08), transparent 50%),
+        var(--bg);
+    }
+    .viewport {
+      position: relative;
+      width: 0;
+      height: 0;
+      flex: 0 0 auto;
+      background: #000;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .scaler {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform-origin: center center;
+    }
+    iframe {
+      border: 0;
+      display: block;
+      background: #0e1014;
+    }
+    .deck {
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      padding: 12px 16px 16px;
+      display: grid;
+      gap: 10px;
+      position: relative;
+      z-index: 2;
+    }
+    @media (max-width: 800px) {
+      header .meta { display: none; }
+      header select { max-width: 40vw; }
+      .time { min-width: 0; }
+      input[type="range"] { min-width: 80px; }
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    button, .ghost {
+      background: var(--fill);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 12px;
+      cursor: pointer;
+      font: inherit;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary {
+      background: var(--accent);
+      color: #0b0c0f;
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .time {
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      min-width: 148px;
+    }
+    input[type="range"] {
+      flex: 1;
+      min-width: 160px;
+      accent-color: var(--accent);
+    }
+    .log {
+      color: var(--muted);
+      min-height: 18px;
+    }
+    .film {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+    }
+    .film img, .export img {
+      height: 72px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #000;
+    }
+    .export {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .export-bar {
+      flex: 1;
+      height: 6px;
+      min-width: 80px;
+      background: var(--fill);
+      border-radius: 99px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .export-bar > i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.12s linear;
+    }
+    .export.busy .export-bar > i { background: #7ee0c3; }
+    .export.err .export-bar > i { background: #f09595; }
+    kbd {
+      font: 11px ui-monospace, monospace;
+      border: 1px solid var(--line);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 0 5px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">REEL</div>
+    <div class="live" id="live">WATCH</div>
+    <div class="meta" id="meta">等待场景…</div>
+    <select id="scenes"></select>
+  </header>
+  <div class="viewport-wrap" id="viewport-wrap">
+    <div class="viewport" id="viewport">
+      <div class="scaler" id="scaler">
+        <iframe id="stage" title="scene"></iframe>
+      </div>
+    </div>
+  </div>
+  <div class="deck">
+    <div class="row">
+      <button id="btnPlay" class="primary">播放</button>
+      <button id="btnStop">回到 0</button>
+      <button id="btnPrev">−1 帧</button>
+      <button id="btnNext">+1 帧</button>
+      <span class="time" id="time">00:00.00 / 00:00.00</span>
+      <input id="scrub" type="range" min="0" max="1000" value="0" />
+      <button id="spd" title="速度">1×</button>
+      <button id="btnCapture" class="primary">导出 MP4</button>
+    </div>
+    <div class="row export" id="export">
+      <div class="export-bar"><i id="exportFill"></i></div>
+      <span class="log" id="exportText">导出待命 · 主模型跑 capture 时这里会动</span>
+      <img id="exportPreview" alt="" hidden />
+    </div>
+    <div class="row">
+      <span class="log" id="log">空格播放 · ← → 逐帧 · Home / End</span>
+    </div>
+    <div class="film" id="film"></div>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      t: 0,
+      duration: 4,
+      fps: 30,
+      width: 1280,
+      height: 720,
+      playing: false,
+      speed: 1,
+      last: 0,
+      scene: "",
+      ready: false,
+      mtime: 0,
+      autoplay: false,
+      keepT: null,
+    };
+
+    function fmt(t) {
+      const m = Math.floor(t / 60);
+      const s = t - m * 60;
+      return String(m).padStart(2, "0") + ":" + s.toFixed(2).padStart(5, "0");
+    }
+
+    function seek(t, fromScrub) {
+      state.t = Math.max(0, Math.min(state.duration, t));
+      if (!fromScrub) $("scrub").value = String(Math.round((state.t / state.duration) * 1000) || 0);
+      $("time").textContent = fmt(state.t) + " / " + fmt(state.duration);
+      const win = $("stage").contentWindow;
+      if (win) win.postMessage({ type: "reel:seek", t: state.t }, "*");
+    }
+
+    function layout() {
+      const wrap = $("viewport-wrap");
+      const vp = $("viewport");
+      if (!wrap || !vp) return;
+      const pad = 4;
+      const availW = Math.max(160, wrap.clientWidth - pad * 2);
+      const availH = Math.max(90, wrap.clientHeight - pad * 2);
+      const s = Math.min(availW / state.width, availH / state.height);
+      vp.style.width = Math.max(1, Math.floor(state.width * s)) + "px";
+      vp.style.height = Math.max(1, Math.floor(state.height * s)) + "px";
+      const scaler = $("scaler");
+      const iframe = $("stage");
+      iframe.style.width = state.width + "px";
+      iframe.style.height = state.height + "px";
+      scaler.style.width = state.width + "px";
+      scaler.style.height = state.height + "px";
+      scaler.style.transform = "translate(-50%, -50%) scale(" + s + ")";
+    }
+
+    function metaText() {
+      $("meta").textContent =
+        state.width + "×" + state.height + " · " + state.fps + " fps · " + state.duration.toFixed(2) + "s";
+    }
+
+    function loadScene(path) {
+      state.ready = false;
+      state.playing = false;
+      $("btnPlay").textContent = "播放";
+      state.scene = path;
+      const bust = Date.now();
+      $("stage").src = "/scene?path=" + encodeURIComponent(path) + "&t=" + bust;
+      $("log").textContent = "加载 " + path;
+      const u = new URL(location.href);
+      u.searchParams.set("scene", path);
+      history.replaceState(null, "", u);
+    }
+
+    async function refreshScenes(selected) {
+      const res = await fetch("/api/scenes");
+      const data = await res.json();
+      const sel = $("scenes");
+      sel.innerHTML = "";
+      for (const s of data.scenes) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        sel.appendChild(opt);
+      }
+      if (selected && data.scenes.includes(selected)) sel.value = selected;
+      return sel.value || data.scenes[0];
+    }
+
+    $("scenes").addEventListener("change", () => loadScene($("scenes").value));
+    $("btnPlay").addEventListener("click", toggle);
+    $("btnStop").addEventListener("click", () => {
+      state.playing = false;
+      $("btnPlay").textContent = "播放";
+      seek(0);
+    });
+    $("btnPrev").addEventListener("click", () => {
+      state.playing = false;
+      $("btnPlay").textContent = "播放";
+      seek(state.t - 1 / state.fps);
+    });
+    $("btnNext").addEventListener("click", () => {
+      state.playing = false;
+      $("btnPlay").textContent = "播放";
+      seek(state.t + 1 / state.fps);
+    });
+    $("spd").addEventListener("click", () => {
+      const next = state.speed === 1 ? 0.5 : state.speed === 0.5 ? 2 : 1;
+      state.speed = next;
+      $("spd").textContent = next + "×";
+    });
+    $("scrub").addEventListener("input", (e) => {
+      state.playing = false;
+      $("btnPlay").textContent = "播放";
+      seek((Number(e.target.value) / 1000) * state.duration, true);
+    });
+    $("btnCapture").addEventListener("click", capture);
+
+    function toggle() {
+      if (!state.ready) return;
+      if (state.t >= state.duration - 1e-6) seek(0);
+      state.playing = !state.playing;
+      $("btnPlay").textContent = state.playing ? "暂停" : "播放";
+      state.last = performance.now();
+    }
+
+    window.addEventListener("keydown", (e) => {
+      if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")) return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        toggle();
+      } else if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        seek(state.t - 1 / state.fps);
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        seek(state.t + 1 / state.fps);
+      } else if (e.code === "Home") seek(0);
+      else if (e.code === "End") seek(state.duration);
+    });
+
+    window.addEventListener("message", (ev) => {
+      const d = ev.data;
+      if (!d || d.type !== "reel:ready") return;
+      const r = d.reel || {};
+      state.duration = Number(r.duration) || 4;
+      state.fps = Number(r.fps) || 30;
+      state.width = Number(r.width) || 1280;
+      state.height = Number(r.height) || 720;
+      state.ready = true;
+      metaText();
+      layout();
+      const resume = state.keepT;
+      state.keepT = null;
+      seek(resume == null ? 0 : resume);
+      $("log").textContent = "已接上虚拟时钟 · 拖时间轴或按空格";
+      if (state.autoplay) {
+        state.autoplay = false;
+        state.playing = true;
+        $("btnPlay").textContent = "暂停";
+        state.last = performance.now();
+      }
+    });
+
+    function loop(now) {
+      if (state.playing) {
+        const dt = (now - state.last) / 1000 * state.speed;
+        state.last = now;
+        const next = state.t + dt;
+        if (next >= state.duration) {
+          seek(state.duration);
+          state.playing = false;
+          $("btnPlay").textContent = "播放";
+        } else seek(next);
+      } else {
+        state.last = now;
+      }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+    window.addEventListener("resize", layout);
+    if (window.ResizeObserver) new ResizeObserver(layout).observe($("viewport-wrap"));
+
+    async function capture() {
+      if (!state.scene) return;
+      $("btnCapture").disabled = true;
+      $("log").textContent = "正在截帧合成，窗口不要关…";
+      $("film").innerHTML = "";
+      try {
+        const res = await fetch("/api/capture", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: state.scene }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "capture failed");
+        $("log").textContent = "已导出 " + data.mp4;
+        for (const q of data.qa || []) {
+          const img = document.createElement("img");
+          img.src = q + "?t=" + Date.now();
+          img.alt = q;
+          $("film").appendChild(img);
+        }
+      } catch (err) {
+        $("log").textContent = String(err.message || err);
+      } finally {
+        $("btnCapture").disabled = false;
+      }
+    }
+
+    function onLiveEvent(ev) {
+      if (ev.type === "log" && ev.text) $("log").textContent = ev.text;
+      if (ev.type === "status" && ev.scenes) {
+        const cur = state.scene;
+        refreshScenes(cur || new URLSearchParams(location.search).get("scene"));
+      }
+      if (ev.type === "captions" && state.scene) {
+        state.keepT = state.t;
+        loadScene(state.scene);
+      }
+      if (ev.type === "scene" && ev.path) {
+        $("live").classList.add("on");
+        const sel = $("scenes");
+        if (![...sel.options].some((o) => o.value === ev.path)) {
+          const opt = document.createElement("option");
+          opt.value = ev.path;
+          opt.textContent = ev.path;
+          sel.appendChild(opt);
+        }
+        sel.value = ev.path;
+        state.autoplay = true;
+        loadScene(ev.path);
+      }
+      if (ev.type === "qa" && ev.path) {
+        const img = document.createElement("img");
+        img.src = ev.path + "?t=" + Date.now();
+        img.alt = ev.path;
+        $("film").prepend(img);
+      }
+      if (ev.type === "capture" && ev.qa) {
+        $("film").innerHTML = "";
+        for (const q of ev.qa) {
+          const img = document.createElement("img");
+          img.src = q + "?t=" + Date.now();
+          $("film").appendChild(img);
+        }
+      }
+      if (ev.type === "progress") applyProgress(ev);
+    }
+
+    function applyProgress(p) {
+      const box = $("export");
+      const fill = $("exportFill");
+      const text = $("exportText");
+      const prev = $("exportPreview");
+      const pct = p.total ? Math.round((100 * (p.current || 0)) / p.total) : 0;
+      box.classList.toggle("busy", p.phase === "capture" || p.phase === "encode");
+      box.classList.toggle("err", p.phase === "error");
+      fill.style.width = (p.phase === "done" ? 100 : pct) + "%";
+      text.textContent = p.message || p.phase || "";
+      $("live").textContent =
+        p.phase === "capture" || p.phase === "encode" ? "EXPORT" :
+        p.phase === "done" ? "DONE" : "WATCH";
+      $("live").classList.toggle("on", p.phase !== "idle");
+      if (p.preview) {
+        prev.hidden = false;
+        prev.src = p.preview + "?t=" + (p.at || Date.now());
+      }
+      if (p.phase === "done" && p.qa) {
+        $("film").innerHTML = "";
+        for (const q of p.qa) {
+          const img = document.createElement("img");
+          img.src = q + "?t=" + Date.now();
+          $("film").appendChild(img);
+        }
+        $("log").textContent = p.mp4 ? "已导出 " + p.mp4 : "导出完成";
+      }
+      if (p.phase === "error") $("log").textContent = p.message || "导出失败";
+    }
+
+    (async function init() {
+      const wanted = new URLSearchParams(location.search).get("scene");
+      const first = await refreshScenes(wanted);
+      if (first) loadScene(first);
+      fetch("/api/progress").then((r) => r.json()).then(applyProgress).catch(() => {});
+      const es = new EventSource("/api/events");
+      es.onmessage = (m) => {
+        try {
+          onLiveEvent(JSON.parse(m.data));
+        } catch {}
+      };
+      setTimeout(() => {
+        const win = $("stage").contentWindow;
+        if (win) win.postMessage({ type: "reel:ping" }, "*");
+      }, 800);
+    })();
+  </script>
+</body>
+</html>

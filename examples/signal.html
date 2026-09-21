@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>reel example — signal</title>
+  <!-- 深色 KPI 样例：只示范契约，不是默认皮肤。 -->
+  <script>window.REEL = { duration: 4, fps: 30, width: 1280, height: 720 };</script>
+  <style>
+    html, body { margin: 0; background: #0e1014; }
+    .stage {
+      position: relative;
+      width: 1280px;
+      height: 720px;
+      overflow: hidden;
+      color: #e8eaed;
+      font-family: system-ui, "PingFang SC", "Noto Sans SC", sans-serif;
+      background:
+        radial-gradient(1200px 500px at 80% 10%, rgba(138, 180, 255, 0.14), transparent 55%),
+        #0e1014;
+    }
+    .kicker {
+      position: absolute;
+      left: 96px;
+      top: 196px;
+      font-size: 13px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: #8ab4ff;
+      opacity: 0;
+      animation: fade 500ms 180ms both;
+    }
+    .value {
+      position: absolute;
+      left: 96px;
+      top: 228px;
+      margin: 0;
+      font-size: 120px;
+      font-weight: 620;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      opacity: 0;
+      transform: translateY(18px);
+      animation: rise 700ms 420ms both;
+    }
+    .unit {
+      margin-left: 12px;
+      font-size: 28px;
+      font-weight: 500;
+      letter-spacing: 0;
+      color: #9aa0a6;
+    }
+    .caption {
+      position: absolute;
+      left: 96px;
+      top: 372px;
+      margin: 0;
+      font-size: 22px;
+      font-weight: 400;
+      color: #c5c8ce;
+      opacity: 0;
+      animation: fade 600ms 1100ms both;
+    }
+    .track {
+      position: absolute;
+      left: 96px;
+      top: 456px;
+      width: 640px;
+      height: 6px;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .bar {
+      width: 100%;
+      height: 100%;
+      border-radius: 99px;
+      background: #8ab4ff;
+      transform: scaleX(0);
+      transform-origin: left center;
+      animation: grow 1800ms 800ms both cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .end {
+      position: absolute;
+      left: 96px;
+      top: 488px;
+      font-size: 14px;
+      color: #8ab4ff;
+      opacity: 0;
+      animation: fade 500ms 2600ms both;
+    }
+    @keyframes fade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(18px); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes grow {
+      from { transform: scaleX(0); }
+      to { transform: scaleX(1); }
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="kicker">Uplink · live</div>
+    <p class="value"><span id="n">0</span><span class="unit">ms</span></p>
+    <p class="caption">Round-trip latency, last 24 hours</p>
+    <div class="track"><div class="bar"></div></div>
+    <div class="end">p95 settled · 128 ms</div>
+  </div>
+  <script>
+    function easeOutCubic(x) {
+      return 1 - Math.pow(1 - x, 3);
+    }
+    function reelDraw(t) {
+      var start = 0.8;
+      var len = 1.8;
+      var u = Math.max(0, Math.min(1, (t - start) / len));
+      var v = Math.round(easeOutCubic(u) * 128);
+      document.getElementById("n").textContent = String(v);
+    }
+  </script>
+</body>
+</html>
