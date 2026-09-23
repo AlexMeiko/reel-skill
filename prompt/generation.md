@@ -105,7 +105,7 @@ node tools/subs.mjs reel-out/part-01.timeline.json --out reel-out/part-01.srt
 window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 ```
 
-颜色可换，布局不要改：`--reel-gbar-fill` / `--reel-gbar-track` / `--reel-gbar-fg` / `--reel-gbar-fg-on`。条高固定 36px。填充改成浅色时必须同时设 `--reel-gbar-fg-on`，默认白字会看不见。不要自动配色。
+颜色可换，布局不要改：`--reel-gbar-fill` / `--reel-gbar-track` / `--reel-gbar-fg` / `--reel-gbar-fg-on`。条高默认是画面高度的 5%（`--reel-gbar-h`），字号默认是条高的一半（`--reel-gbar-fs`），换分辨率同比缩放。填充改成浅色时必须同时设 `--reel-gbar-fg-on`，盖住的字才会看得见。不要自动配色。
 
 ## 时间怎么写
 

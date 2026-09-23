@@ -82,7 +82,8 @@
       "}",
       ".reel-kit-caption[data-empty='1'] { visibility:hidden; }",
       ".reel-gbar {",
-      "  position:absolute; left:0; right:0; bottom:0; height:36px; z-index:25;",
+      "  position:absolute; left:0; right:0; bottom:0; z-index:25;",
+      "  height:var(--reel-gbar-h, 5%);",
       "  pointer-events:none; display:flex; align-items:stretch;",
       "  overflow:hidden;",
       "  background:var(--reel-gbar-track, color-mix(in srgb, currentColor 12%, transparent));",
@@ -93,14 +94,18 @@
       "}",
       ".reel-gbar-ch {",
       "  position:relative; z-index:1; display:flex; align-items:center; justify-content:center;",
-      "  min-width:0; padding:0 6px; box-sizing:border-box;",
-      "  font-weight:600; font-size:11px; line-height:1; font-family:inherit;",
+      "  min-width:0; padding:0 0.33em; box-sizing:border-box;",
+      "  font-weight:600; font-size:var(--reel-gbar-fs, 1em); line-height:1; font-family:inherit;",
       "  letter-spacing:.02em;",
       "  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
-      "  color:var(--reel-gbar-fg, currentColor); opacity:.4;",
+      "  color:var(--reel-gbar-fg, currentColor);",
       "}",
-      ".reel-gbar-ch[data-on='1'], .reel-gbar-ch[data-past='1'] {",
-      "  color:var(--reel-gbar-fg-on, #fff); opacity:1;",
+      ".reel-gbar-under { display:block; opacity:.4; }",
+      ".reel-gbar-over {",
+      "  position:absolute; left:0; right:0; top:0; bottom:0;",
+      "  display:flex; align-items:center; justify-content:center;",
+      "  padding:0 0.33em; box-sizing:border-box;",
+      "  color:var(--reel-gbar-fg-on, #fff); pointer-events:none;",
       "}",
       ".reel-kit-hud {",
       "  position:absolute; top:28px; left:50%; transform:translateX(-50%);",
@@ -143,8 +148,16 @@
       var t1 = rng[1] != null && !isNaN(rng[1]) ? rng[1] : i + 1 < chapters.length ? chapterRange(chapters[i + 1])[0] : total;
       var lab = document.createElement("div");
       lab.className = "reel-gbar-ch";
-      lab.textContent = ch.title || ch.text || "";
       lab.style.flex = "0 0 " + (100 * Math.max(0, t1 - t0) / total) + "%";
+      var title = ch.title || ch.text || "";
+      var under = document.createElement("span");
+      under.className = "reel-gbar-under";
+      under.textContent = title;
+      var over = document.createElement("span");
+      over.className = "reel-gbar-over";
+      over.textContent = title;
+      lab.appendChild(under);
+      lab.appendChild(over);
       bar.appendChild(lab);
     }
     return bar;
@@ -159,15 +172,22 @@
     var offset = Number(r.offset) || 0;
     var g = offset + t;
     var bar = ensureGbar(chapters, total);
+    var pct = clamp(g / total, 0, 1);
     var fill = bar.querySelector(".reel-gbar-fill");
-    if (fill) fill.style.width = 100 * clamp(g / total, 0, 1) + "%";
+    if (fill) fill.style.width = 100 * pct + "%";
     var kids = bar.querySelectorAll(".reel-gbar-ch");
+    var acc = 0;
     for (var i = 0; i < kids.length; i++) {
       var rng = chapterRange(chapters[i]);
       var t0 = rng[0];
       var t1 = rng[1] != null && !isNaN(rng[1]) ? rng[1] : i + 1 < chapters.length ? chapterRange(chapters[i + 1])[0] : total;
-      kids[i].setAttribute("data-past", g >= t1 ? "1" : "0");
-      kids[i].setAttribute("data-on", g >= t0 && g < t1 ? "1" : "0");
+      var w = Math.max(0, t1 - t0) / total;
+      var over = kids[i].querySelector(".reel-gbar-over");
+      if (over && w > 0) {
+        var cov = Math.max(0, Math.min(w, pct - acc));
+        over.style.clipPath = "inset(0 " + (100 * (1 - cov / w)).toFixed(3) + "% 0 0)";
+      }
+      acc += w;
     }
   }
 
@@ -203,8 +223,32 @@
     apply: apply,
   };
 
+  function cssVar(el, name) {
+    if (!el || !root.getComputedStyle) return "";
+    return (root.getComputedStyle(el).getPropertyValue(name) || "").trim();
+  }
+
+  function gbarMetrics() {
+    var r = root.REEL || {};
+    var stage = root.document.querySelector(".stage");
+    var host = root.document.documentElement;
+    if (!host) return;
+    if (cssVar(stage, "--reel-gbar-fs") || cssVar(host, "--reel-gbar-fs")) return;
+    var spec = cssVar(stage, "--reel-gbar-h") || cssVar(host, "--reel-gbar-h");
+    var barH = 0;
+    if (spec && /px$/i.test(spec)) barH = parseFloat(spec);
+    else {
+      var pct = spec ? parseFloat(spec) : 5;
+      if (!(pct > 0)) pct = 5;
+      barH = (Number(r.height) || 0) * pct / 100;
+    }
+    if (!(barH > 0)) return;
+    host.style.setProperty("--reel-gbar-fs", (barH * 0.5).toFixed(2) + "px");
+  }
+
   function wrap() {
     injectCss();
+    try { gbarMetrics(); } catch (e) {}
     var prev = root.__reelSeek;
     if (typeof prev !== "function" || prev.__reelKitWrapped) return;
     var wrapped = function (t) {
