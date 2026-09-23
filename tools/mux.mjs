@@ -25,7 +25,7 @@ function parseArgs(argv) {
     out: null,
     burn: false,
     soft: false,
-    lufs: -16,
+    lufs: -18,
     keepStereo: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -72,7 +72,7 @@ const args = parseArgs(process.argv.slice(2));
 if (args.help || !args.video || !args.out) {
   console.log(`Usage: node mux.mjs --video scene.mp4 [--audio full-mix.wav] --out scene-vo.mp4
   captions already live in the video from capture
-  voice is downmixed to mono and normalized to -16 LUFS (TP -1.5). Override with --lufs, or --keep-stereo
+  voice is downmixed to mono and normalized to -18 LUFS (TP -1.5). Override with --lufs, or --keep-stereo
   --burn --subs file.srt   optional ffmpeg/libass overlay
   --soft --subs file.srt   optional mov_text track`);
   process.exit(args.help ? 0 : 64);
