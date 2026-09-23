@@ -63,6 +63,24 @@ function run(cmd, argv) {
   });
 }
 
+function probeDuration(file) {
+  return new Promise((resolveP, reject) => {
+    const p = spawn(
+      "ffprobe",
+      ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", file],
+      { stdio: ["ignore", "pipe", "pipe"] }
+    );
+    let out = "";
+    let err = "";
+    p.stdout.on("data", (c) => (out += c.toString()));
+    p.stderr.on("data", (c) => (err += c.toString()));
+    p.on("close", (code) => {
+      if (code !== 0) reject(new Error("ffprobe failed on " + file + "\n" + err.slice(-500)));
+      else resolveP(Number(out.trim()) || 0);
+    });
+  });
+}
+
 function subtitlesFilter(abs) {
   const escaped = resolve(abs).replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
   return "subtitles=" + escaped;
@@ -111,7 +129,20 @@ if (audio) {
   if (!args.keepStereo) ff.push("-ac", "1");
 }
 if (subs && args.soft) ff.push("-c:s", "mov_text", "-metadata:s:s:0", "language=chi");
-ff.push("-shortest", "-movflags", "+faststart", outPath);
+if (audio) {
+  const videoDur = await probeDuration(video);
+  const audioDur = await probeDuration(audio);
+  if (audioDur > videoDur + 0.05) {
+    die(
+      "audio " +
+        audioDur.toFixed(3) +
+        "s is longer than video " +
+        videoDur.toFixed(3) +
+        "s; refusing to cut the voice. Video may be longer (end hold)."
+    );
+  }
+}
+ff.push("-movflags", "+faststart", outPath);
 
 try {
   await run("ffmpeg", ff);

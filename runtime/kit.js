@@ -147,7 +147,6 @@
       lab.style.flex = "0 0 " + (100 * Math.max(0, t1 - t0) / total) + "%";
       bar.appendChild(lab);
     }
-    document.documentElement.style.setProperty("--reel-caption-bottom", "42px");
     return bar;
   }
 

@@ -86,7 +86,7 @@ node tools/subs.mjs reel-out/part-01.timeline.json --out reel-out/part-01.srt
 
 ## 全片进度条
 
-要么不要条，要么用 kit 这条（满宽底栏、章名在格子里、填充从左往右）。**不要手画**细线、竖标、飘字。
+要么不要条，要么用 kit 这条（满宽底栏、章名在格子里、填充从左往右）。不写 `reel-out/gbar.json` 就是关闭，不必再加开关。**不要手画**细线、竖标、飘字。
 
 全片一份 `reel-out/gbar.json`，各段只写本段 `offset`（前面各段时长之和）。填充 `(offset + t) / total`，concat 后连续。
 
@@ -105,7 +105,7 @@ node tools/subs.mjs reel-out/part-01.timeline.json --out reel-out/part-01.srt
 window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 ```
 
-颜色可换，布局不要改：`--reel-gbar-fill` / `--reel-gbar-track` / `--reel-gbar-fg` / `--reel-gbar-fg-on`。
+颜色可换，布局不要改：`--reel-gbar-fill` / `--reel-gbar-track` / `--reel-gbar-fg` / `--reel-gbar-fg-on`。条高固定 36px。填充改成浅色时必须同时设 `--reel-gbar-fg-on`，默认白字会看不见。不要自动配色。
 
 ## 时间怎么写
 

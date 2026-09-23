@@ -89,10 +89,13 @@ function defaultJobs() {
 }
 
 function parseTimes(s) {
-  return String(s)
-    .split(/[,\s]+/)
-    .map((x) => Number(x))
-    .filter((x) => !Number.isNaN(x) && x >= 0);
+  const parts = String(s).split(/[,\s]+/).filter(Boolean);
+  if (!parts.length) die("empty time list");
+  return parts.map((raw) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) die("bad time \"" + raw + "\" (seconds >= 0)");
+    return n;
+  });
 }
 
 function parseArgs(argv) {
@@ -456,7 +459,19 @@ async function readReel(cdp, args) {
   if (!meta || !meta.duration) {
     die("window.REEL.duration missing. Declare window.REEL = { duration, fps, width, height }");
   }
-  const duration = args.duration || meta.duration;
+  if (args.duration != null) {
+    if (!Number.isFinite(args.duration) || !(args.duration > 0)) die("bad --duration " + args.duration);
+    if (Math.abs(args.duration - meta.duration) > 0.02) {
+      die(
+        "--duration " +
+          args.duration +
+          " != page REEL.duration " +
+          meta.duration +
+          " (refusing to repeat or cut frames)"
+      );
+    }
+  }
+  const duration = meta.duration;
   const fps = args.fps || meta.fps || 30;
   const width = args.width || meta.width || 1280;
   const height = args.height || meta.height || 720;
@@ -488,9 +503,12 @@ async function preparePage(cdp, reel, htmlPath) {
     if (loaded.error) die(loaded.error);
     const cues = loaded.cues;
     const gbar = loadGbarForHtml(htmlPath);
+    if (loaded.file) console.error("[reel] captions " + loaded.file);
+    if (gbar && gbar.file) console.error("[reel] gbar " + gbar.file);
     if (cues.length || (gbar && gbar.chapters && gbar.chapters.length)) {
       await evaluate(cdp, injectSidecarJs(cues, gbar));
       if (cues.length) reel.captions = cues;
+      if (gbar && gbar.chapters && gbar.chapters.length) reel.gbarChapters = gbar.chapters;
     }
   }
   await settleSeek(cdp);
@@ -531,6 +549,14 @@ function keyNodes(reel) {
     const raw = c && c.t;
     const t0 = Array.isArray(raw) ? raw[0] : raw;
     add(t0, "chapter " + (c.title || c.text || "#" + i));
+  });
+  const offset = Number(reel.offset) || 0;
+  (reel.gbarChapters || []).forEach((c, i) => {
+    const raw = c && c.t;
+    const t0 = Array.isArray(raw) ? raw[0] : raw;
+    const local = Number(t0) - offset;
+    if (!Number.isFinite(local) || local < -1e-3 || local > duration + 1e-3) return;
+    add(local, "gbar " + (c.title || c.text || "#" + i));
   });
   hits.sort((a, b) => a.t - b.t || a.label.localeCompare(b.label));
   const out = [];
@@ -646,6 +672,8 @@ async function extractFromMp4(args) {
       : args.at && args.at.length
         ? args.at
         : [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1].map((p) => p * dur);
+  if (args.qaAt && args.qaAt.length) warnOutOfRange(times, dur, "--qa-at");
+  else if (args.at && args.at.length) warnOutOfRange(times, dur, "--at");
   const files = [];
   for (let i = 0; i < times.length; i++) {
     const t = Math.max(0, Math.min(dur, times[i]));
@@ -779,9 +807,25 @@ async function workerMain(htmlPath, args) {
   console.log(JSON.stringify({ ok: true, worker: true, start: args.startFrame, count: args.frameCount }));
 }
 
+function assertMp4(outPath) {
+  if (!String(outPath).toLowerCase().endsWith(".mp4")) {
+    die("--out must be a .mp4 file, got " + outPath);
+  }
+}
+
+function ensureDir(dir, label) {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    die(label + " not writable: " + dir + " (" + (err && err.message ? err.message : err) + ")");
+  }
+}
+
 async function exportScene(htmlPath, args) {
   const outPath = resolve(args.out || join(dirname(htmlPath), "out.mp4"));
-  mkdirSync(dirname(outPath), { recursive: true });
+  assertMp4(outPath);
+  ensureDir(dirname(outPath), "output dir");
+  ensureDir(args.qaDir ? resolve(args.qaDir) : join(dirname(outPath), "qa"), "qa dir");
   progressDir = dirname(outPath);
   const work = mkdtempSync(join(tmpdir(), "reel-frames-"));
   const framesDir = args.framesDir ? resolve(args.framesDir) : join(work, "frames");
@@ -981,7 +1025,9 @@ async function main() {
   --qa-at S[,S…]  override QA sample times (segment time for export; whole-film time for --from-mp4)
   --jobs N     parallel browsers slicing THIS scene (default = CPU count, max ${JOBS_MAX})
   --crf N      x264 quality, lower is better (default 14)
-  --fps --duration --width --height override window.REEL
+  --fps --width --height override window.REEL
+  --duration must match window.REEL.duration; a mismatch is an error, not a trim
+  --out must be a .mp4 path
   --browser PATH  --no-sandbox  --frames-dir DIR  --keep-frames
   --start-frame / --frame-count are internal (worker slices), do not use directly`);
     process.exit(args.help ? 0 : 64);
