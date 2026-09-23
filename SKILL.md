@@ -63,7 +63,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 9. 时间轴定了再写 `part-01.html`（单段可叫 `scene.html`）。数字用字面量数组。后段抄 knowledge 的皮和上一段结束态。
 10. 先探针再全量：`capture.mjs part-01.html --probe --qa-dir part-01-probe`，读图 + `probe.json`。只看某一秒用 `--at 20.5`。
 11. 全量导出，单段也打满核：`--jobs $(nproc)`（上限 8）。导出后读 `qa-*.png` + `qa.json`。这一段画面不对，只改这一段再导，最多 3 轮。总时长、章节、字幕或 `gbar.json` 变了，烧进画面的段都要重导。画面互不依赖、且这些全局量已定的段可以同时导出。
-12. 多段 concat，再 `mux.mjs` 混音（不要 `--burn`）。
+12. 多段 concat，再 `mux.mjs` 混音（不要 `--burn`）。配音在这一步收成单声道，并归一到 -16 LUFS、真峰值 -1.5 dBTP。不要把单声道复制成左右声道后再交付。真立体声才加 `--keep-stereo`。
 13. 成片抽帧终检（不可省，含各段衔接点）：接缝、gbar 是否连续、字幕、末帧。
 14. 封面两张，和成片同一套皮，各自重排，不要把 16:9 裁成 3:4。
     - `cover-16x9.html`：1920×1080。`cover-3x4.html`：1080×1440。

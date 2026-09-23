@@ -18,7 +18,16 @@ function die(msg, code = 1) {
 }
 
 function parseArgs(argv) {
-  const args = { video: null, audio: null, subs: null, out: null, burn: false, soft: false };
+  const args = {
+    video: null,
+    audio: null,
+    subs: null,
+    out: null,
+    burn: false,
+    soft: false,
+    lufs: -16,
+    keepStereo: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -32,6 +41,8 @@ function parseArgs(argv) {
     else if (a === "--out") args.out = next();
     else if (a === "--burn") args.burn = true;
     else if (a === "--soft") args.soft = true;
+    else if (a === "--lufs") args.lufs = Number(next());
+    else if (a === "--keep-stereo") args.keepStereo = true;
     else if (a === "-h" || a === "--help") args.help = true;
     else die("unknown flag " + a, 64);
   }
@@ -61,6 +72,7 @@ const args = parseArgs(process.argv.slice(2));
 if (args.help || !args.video || !args.out) {
   console.log(`Usage: node mux.mjs --video scene.mp4 [--audio full-mix.wav] --out scene-vo.mp4
   captions already live in the video from capture
+  voice is downmixed to mono and normalized to -16 LUFS (TP -1.5). Override with --lufs, or --keep-stereo
   --burn --subs file.srt   optional ffmpeg/libass overlay
   --soft --subs file.srt   optional mov_text track`);
   process.exit(args.help ? 0 : 64);
@@ -90,7 +102,14 @@ if (args.burn && subs) {
 } else {
   ff.push("-c:v", "copy");
 }
-if (audio) ff.push("-c:a", "aac", "-b:a", "192k");
+if (audio) {
+  if (!(args.lufs < 0)) die("--lufs must be negative LUFS, got " + args.lufs);
+  const chain = args.keepStereo
+    ? "loudnorm=I=" + args.lufs + ":TP=-1.5:LRA=11"
+    : "aformat=channel_layouts=mono,loudnorm=I=" + args.lufs + ":TP=-1.5:LRA=11";
+  ff.push("-af", chain, "-c:a", "aac", "-b:a", "192k");
+  if (!args.keepStereo) ff.push("-ac", "1");
+}
 if (subs && args.soft) ff.push("-c:s", "mov_text", "-metadata:s:s:0", "language=chi");
 ff.push("-shortest", "-movflags", "+faststart", outPath);
 
