@@ -42,7 +42,7 @@
 </html>
 ```
 
-样例只抄契约：[signal.html](../examples/signal.html)、[explainer.html](../examples/explainer.html)。
+样例只抄契约：[contract.html](../examples/contract.html)。不要抄它的样子。
 
 ## 风格（你选，技能不指定）
 

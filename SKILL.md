@@ -82,7 +82,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 5. 系统字体；不要外链字体 / `<video>` / 随机数当主运动。
 6. 不要把技能目录、`scratch/`、`examples/` 当输出路径。
 
-样例只抄契约：[examples/signal.html](examples/signal.html)、[examples/explainer.html](examples/explainer.html)。
+样例只抄契约：[examples/contract.html](examples/contract.html)。不要抄它的样子。
 
 ## 抽帧怎么判
 
@@ -100,7 +100,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 | 数值到终点文案已是结束态 | 不要 100% 还写 LOADING |
 | 没有竖线扫光被看成分割线 | 删 sweep/scan，用进度本身 |
 | 末帧是结束态，不是闪回第 0 帧 | 去 infinite，补 both/forwards |
-| 风格像又一份深色仪表盘但题材不是 | 换配色排版，不要套 examples/signal.html |
+| 风格像又一份深色仪表盘但题材不是 | 换配色排版，不要套示例页 |
 
 同一 `t` 截两次应一样。改 HTML，不要手调 PNG。
 

@@ -284,7 +284,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === "GET" && url.pathname === "/scene") {
-      const rel = url.searchParams.get("path") || args.sceneRel || "examples/signal.html";
+      const rel = url.searchParams.get("path") || args.sceneRel || "examples/contract.html";
       const abs = resolveScene(rel);
       if (!abs || !existsSync(abs)) {
         send(res, 404, "scene not found");

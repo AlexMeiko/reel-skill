@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <!-- 只示范契约：REEL、.stage、reelDraw(t)。不是皮肤，不要抄这页的样子。 -->
+  <script>
+    window.REEL = { duration: 4, fps: 30, width: 1280, height: 720 };
+  </script>
+  <style>
+    html, body { margin: 0; }
+    .stage {
+      position: relative;
+      width: 1280px;
+      height: 720px;
+      overflow: hidden;
+      background: #f4f4f4;
+      color: #222;
+      font-family: system-ui, sans-serif;
+    }
+    #label { position: absolute; left: 64px; top: 300px; font-size: 20px; }
+    #bar { position: absolute; left: 64px; top: 348px; height: 8px; background: #222; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div id="label"></div>
+    <div id="bar"></div>
+  </div>
+  <script>
+    function reelDraw(t) {
+      var d = window.REEL.duration;
+      document.getElementById("label").textContent = t.toFixed(2);
+      document.getElementById("bar").style.width = (1152 * t / d) + "px";
+    }
+  </script>
+</body>
+</html>
