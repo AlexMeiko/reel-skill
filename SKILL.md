@@ -76,7 +76,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 输出**一个**自包含 HTML：
 
 1. `window.REEL = { duration, fps, width, height, offset? }`。有配音时 `duration` 抄 timeline 末句 + ~0.4s；宽高偶数。`offset` 是写进页面的字面量，等于前面各段时长之和；前面变了，后面的 HTML 和 MP4 一起过期。
-2. 画面在 `.stage`，尺寸 = width×height，不用 `vw/vh`。
+2. 画面在 `.stage`，尺寸 = width×height，不用 `vw/vh`。`width/height` 就是成片像素，没有倍率；`.stage` 必须等于它。模板里的 1280×720 只是默认画布。文件名不影响分辨率。`--width` / `--height` 只改视口，不会把舞台放大。
 3. 运动只能来自 CSS/WAAPI（`fill: both`，禁 `infinite`）、`reelDraw(t)`、`reelSeek(t)`。口播走 srt；进度条走 `gbar.json` + `REEL.offset`（要么不用），不要手画，不要 `REEL.chapters`。
 4. 禁 `Date.now()` / `performance.now()` / 无时钟 rAF。rAF 只读 `window.__reelTime`。
 5. 系统字体；不要外链字体 / `<video>` / 随机数当主运动。

@@ -1025,7 +1025,9 @@ async function main() {
   --qa-at S[,S…]  override QA sample times (segment time for export; whole-film time for --from-mp4)
   --jobs N     parallel browsers slicing THIS scene (default = CPU count, max ${JOBS_MAX})
   --crf N      x264 quality, lower is better (default 14)
-  --fps --width --height override window.REEL
+  --fps overrides window.REEL.fps
+  --width --height change the viewport only; they do not scale .stage
+  --timeout N  page-load timeout in ms (default 20000)
   --duration must match window.REEL.duration; a mismatch is an error, not a trim
   --out must be a .mp4 path
   --browser PATH  --no-sandbox  --frames-dir DIR  --keep-frames
