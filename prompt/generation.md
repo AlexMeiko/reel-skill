@@ -159,6 +159,17 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 - 底栏用 kit + `gbar.json`，不要手画。
 - 承接：下一段开头沿用上一段结束态（同一元素、构图或配色），不要每段换一套无关联的皮。
 
+### 封面
+
+成片再出两张静帧，皮与正片相同，版式按比例重排（不要裁正片画面）。
+
+| 用途 | 文件 | 像素 |
+|---|---|---|
+| 16:9（如 B 站） | `cover-16x9.html` | 1920×1080 |
+| 3:4（如抖音） | `cover-3x4.html` | 1080×1440 |
+
+`REEL.duration` 取 1，`reelDraw(0)` 画出完整封面。不放进度条、字幕、时长。用 `capture.mjs --at 0` 出 PNG。
+
 ## 自检（写完过一遍）
 
 - 有 `window.REEL`，宽高与 `.stage` 一致且为偶数
@@ -170,3 +181,4 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 - 无外链字体、无 `<video>`、无 `infinite`
 - 配色不是从 examples 抄的
 - 多段时每段 HTML 的底/字/强调色与 knowledge.md 一致
+- 封面是 1920×1080 与 1080×1440 两张 PNG，无进度条、字幕、时长

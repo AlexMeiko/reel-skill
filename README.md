@@ -101,6 +101,8 @@ reel-out/tts/                  逐句音频
 reel-out/part-01.html / .mp4 / part-01-qa/
 reel-out/scene.mp4             画面 concat
 reel-out/scene-vo.mp4          混流成片
+reel-out/cover-16x9.png        16:9 封面（如 B 站，1920×1080）
+reel-out/cover-3x4.png         3:4 封面（如抖音，1080×1440）
 ```
 
 ## 文档
@@ -114,5 +116,5 @@ reel-out/scene-vo.mp4          混流成片
 ## 不是什么
 
 - 不是 AI 生成像素的视频（写实 / 人物 / 电影感不做）。
-- 不是静态流程图工具：只要一张静图，别用这个。
+- 不是静态流程图工具：只要一张与成片无关的静图，别用这个。成片封面是两张静帧（16:9 与 3:4），算在交付里。
 - 运动全部来自 `seek(t)`，同一 `t` 截两次必须一样；禁止墙钟 `Date.now()` / 无时钟 rAF。
