@@ -444,6 +444,7 @@ async function readReel(cdp, args) {
         fps: Number(r.fps) || 0,
         width: Number(r.width) || 0,
         height: Number(r.height) || 0,
+        offset: Number(r.offset) || 0,
         captions: Array.isArray(r.captions) ? r.captions : [],
         chapters: Array.isArray(r.chapters) ? r.chapters : [],
         hud: Array.isArray(r.hud) ? r.hud : [],
@@ -483,7 +484,9 @@ async function preparePage(cdp, reel, htmlPath) {
   const injected = await evaluate(cdp, SEEK_HELPER + "\n" + KIT_HELPER);
   if (injected !== "ok") die("failed to inject __reelSeek / kit");
   if (htmlPath) {
-    const { cues } = loadCuesForHtml(htmlPath);
+    const loaded = loadCuesForHtml(htmlPath, reel.offset);
+    if (loaded.error) die(loaded.error);
+    const cues = loaded.cues;
     const gbar = loadGbarForHtml(htmlPath);
     if (cues.length || (gbar && gbar.chapters && gbar.chapters.length)) {
       await evaluate(cdp, injectSidecarJs(cues, gbar));

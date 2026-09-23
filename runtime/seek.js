@@ -29,12 +29,18 @@
     if (typeof root.reelDraw === "function") {
       try {
         root.reelDraw(t);
-      } catch (e) {}
+      } catch (e) {
+        root.__reelError = root.__reelError || { t: t, message: String((e && e.message) || e) };
+        throw e;
+      }
     }
     if (typeof root.reelSeek === "function") {
       try {
         root.reelSeek(t);
-      } catch (e) {}
+      } catch (e) {
+        root.__reelError = root.__reelError || { t: t, message: String((e && e.message) || e) };
+        throw e;
+      }
     }
     document.documentElement.getBoundingClientRect();
     return t;

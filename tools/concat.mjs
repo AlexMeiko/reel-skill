@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Concat reel parts into one MP4. Same size/fps assumed (capture output).
+ * Concat reel parts into one MP4. Stream copy only (no re-encode).
+ * Parts must already match (size, fps, codec) — capture output does.
  *
  *   node tools/concat.mjs part-01.mp4 part-02.mp4 --out scene.mp4
  */
@@ -64,12 +65,8 @@ try {
     "0",
     "-i",
     list,
-    "-c:v",
-    "libx264",
-    "-pix_fmt",
-    "yuv420p",
-    "-crf",
-    "18",
+    "-c",
+    "copy",
     "-movflags",
     "+faststart",
     outPath,

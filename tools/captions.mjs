@@ -69,12 +69,32 @@ export function captionSidecars(htmlPath) {
   ];
 }
 
-export function loadCuesForHtml(htmlPath) {
+function isGlobalCaption(file) {
+  return /(?:^|\/)(?:captions\.srt|timeline\.json)$/.test(file);
+}
+
+export function loadCuesForHtml(htmlPath, offset) {
+  const stem = basename(htmlPath).replace(/\.html$/i, "");
   for (const p of captionSidecars(htmlPath)) {
     const cues = readCues(p);
-    if (cues.length) return { cues, file: p };
+    if (!cues.length) continue;
+    if (Number(offset) > 0 && isGlobalCaption(p)) {
+      return {
+        cues: [],
+        file: p,
+        error:
+          "REEL.offset=" +
+          offset +
+          " but captions came from " +
+          basename(p) +
+          " (full-film clock). Write " +
+          stem +
+          ".srt first.",
+      };
+    }
+    return { cues, file: p, error: null };
   }
-  return { cues: [], file: null };
+  return { cues: [], file: null, error: null };
 }
 
 export function loadGbarForHtml(htmlPath) {

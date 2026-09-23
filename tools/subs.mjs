@@ -52,11 +52,13 @@ function loadTimeline(path) {
 }
 
 function srtTime(sec) {
-  const x = Math.max(0, Number(sec) || 0);
-  const h = Math.floor(x / 3600);
-  const m = Math.floor((x % 3600) / 60);
-  const s = Math.floor(x % 60);
-  const ms = Math.round((x - Math.floor(x)) * 1000);
+  let ms = Math.round(Math.max(0, Number(sec) || 0) * 1000);
+  const h = Math.floor(ms / 3600000);
+  ms %= 3600000;
+  const m = Math.floor(ms / 60000);
+  ms %= 60000;
+  const s = Math.floor(ms / 1000);
+  ms %= 1000;
   const pad = (n, w) => String(n).padStart(w, "0");
   return pad(h, 2) + ":" + pad(m, 2) + ":" + pad(s, 2) + "," + pad(ms, 3);
 }

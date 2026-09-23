@@ -83,8 +83,15 @@ function listScenes() {
   return out;
 }
 
+function htmlOffset(html) {
+  const m = String(html).match(/\boffset\s*:\s*(-?\d+(?:\.\d+)?)/);
+  return m ? Number(m[1]) : 0;
+}
+
 function injectRuntime(html, htmlPath) {
-  const { cues } = htmlPath ? loadCuesForHtml(htmlPath) : { cues: [] };
+  const loaded = htmlPath ? loadCuesForHtml(htmlPath, htmlOffset(html)) : { cues: [], error: null };
+  if (loaded.error) console.error("[reel] " + loaded.error);
+  const cues = loaded.cues;
   const gbar = htmlPath ? loadGbarForHtml(htmlPath) : { chapters: [] };
   const cap = injectSidecarJs(cues, gbar);
   // Read per request: the panel is long-lived, so a cached copy would hide edits to runtime/.

@@ -56,11 +56,11 @@ reel-out/scene-vo.mp4          混流成片
    - 环境里没有 TTS：问用户要音频/命令，或改无配音，不要默默估时。
    - 降级必须显眼：某句换音色/合成失败，不能只在 stderr 打一行就算成功——文件名要标出、结束汇总「本次 N 句降级」、必要时非零退出。
    - 句间用全片同一固定间隙。`REEL.duration` 与画面 delay 抄 timeline，不要另算。
-   - 字幕用 `subs.mjs` 生成 srt；不要写进 HTML，不要 libass 另烧一套字。
+   - 字幕用 `subs.mjs` 生成该段 `part-NN.srt`，且必须早于该段 MP4。不要写进 HTML，不要 libass 另烧一套字。没有该段 srt 时不要拿全片 `captions.srt` 充数（时基不同，后段会显示前段台词）。
    - 时长不限。拆不拆段、在哪拆由你定（写进 knowledge.md）。
 9. 时间轴定了再写 `part-01.html`（单段可叫 `scene.html`）。数字用字面量数组。后段抄 knowledge 的皮和上一段结束态。
 10. 先探针再全量：`capture.mjs part-01.html --probe --qa-dir part-01-probe`，读图 + `probe.json`。只看某一秒用 `--at 20.5`。
-11. 全量导出，单段也打满核：`--jobs $(nproc)`（上限 8）。导出后读 `qa-*.png` + `qa.json`。不合格改这一段，先探针再导出，每段最多 3 轮。已探针且互不依赖的多段可同时导出。
+11. 全量导出，单段也打满核：`--jobs $(nproc)`（上限 8）。导出后读 `qa-*.png` + `qa.json`。这一段画面不对，只改这一段再导，最多 3 轮。总时长、章节、字幕或 `gbar.json` 变了，烧进画面的段都要重导。画面互不依赖、且这些全局量已定的段可以同时导出。
 12. 多段 concat，再 `mux.mjs` 混音（不要 `--burn`）。
 13. 成片抽帧终检（不可省，含各段衔接点）：接缝、gbar 是否连续、字幕、末帧。
 14. 交付成片路径、分段、口径、成片抽帧结论。
@@ -69,7 +69,7 @@ reel-out/scene-vo.mp4          混流成片
 
 输出**一个**自包含 HTML：
 
-1. `window.REEL = { duration, fps, width, height, offset? }`。有配音时 `duration` 抄 timeline 末句 + ~0.4s；宽高偶数。
+1. `window.REEL = { duration, fps, width, height, offset? }`。有配音时 `duration` 抄 timeline 末句 + ~0.4s；宽高偶数。`offset` 是写进页面的字面量，等于前面各段时长之和；前面变了，后面的 HTML 和 MP4 一起过期。
 2. 画面在 `.stage`，尺寸 = width×height，不用 `vw/vh`。
 3. 运动只能来自 CSS/WAAPI（`fill: both`，禁 `infinite`）、`reelDraw(t)`、`reelSeek(t)`。口播走 srt；进度条走 `gbar.json` + `REEL.offset`（要么不用），不要手画，不要 `REEL.chapters`。
 4. 禁 `Date.now()` / `performance.now()` / 无时钟 rAF。rAF 只读 `window.__reelTime`。
@@ -84,6 +84,7 @@ reel-out/scene-vo.mp4          混流成片
 |---|---|
 | 首帧是空舞台或完整壳，不是散件 | 壳内元素必须是壳的子节点，跟壳一起出现 |
 | 数字/条/游标同一时刻一致 | 只在 `reelDraw(t)` 算一次进度，别 CSS 动条、JS 动数字 |
+| 同一元素同一帧只写一次 | 多段区间打同一个元素时先逐帧取极值再写一次；顺序赋值会盖掉前面的区间 |
 | 口播和画面同一意群 | 换句不必换图；换图时口播已讲到这一层 |
 | 字幕在画面里且和面板一致 | srt 注入 kit；贴 `#gbar` 一行字，不要胶囊/气泡 |
 | 多段 concat 后底栏连续 | `gbar.json` + `REEL.offset`，不要手画 |

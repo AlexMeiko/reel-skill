@@ -93,7 +93,7 @@
       "}",
       ".reel-gbar-ch {",
       "  position:relative; z-index:1; display:flex; align-items:center; justify-content:center;",
-      "  min-width:0; padding:0 6px;",
+      "  min-width:0; padding:0 6px; box-sizing:border-box;",
       "  font-weight:600; font-size:11px; line-height:1; font-family:inherit;",
       "  letter-spacing:.02em;",
       "  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
@@ -212,7 +212,13 @@
       var v = prev(t);
       try {
         apply(root.__reelTime);
-      } catch (e) {}
+      } catch (e) {
+        root.__reelError = root.__reelError || {
+          t: root.__reelTime,
+          message: String((e && e.message) || e),
+        };
+        throw e;
+      }
       return v;
     };
     wrapped.__reelKitWrapped = true;
