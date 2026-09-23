@@ -80,6 +80,7 @@ node tools/capture.mjs "$PWD/reel-out/part-01.html" --at 20.5 --qa-dir "$PWD/ree
 node tools/subs.mjs reel-out/part-01.timeline.json --out reel-out/part-01.srt
 node tools/concat.mjs reel-out/part-01.mp4 reel-out/part-02.mp4 --out reel-out/scene.mp4
 node tools/mux.mjs --video reel-out/scene.mp4 --audio reel-out/voice.wav --out reel-out/scene-vo.mp4
+# voice.wav = 整轨配音：逐句音频按 timeline 拼成，或外部给的录音
 
 # 成片终检：含各段衔接点
 node tools/capture.mjs --from-mp4 reel-out/scene.mp4 --qa-dir reel-out/scene-qa --qa-at 0,19.5,40

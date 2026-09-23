@@ -8,7 +8,7 @@
 
 ```html
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN"><!-- lang 按片子语言；这里只是中文示例 -->
 <head>
   <meta charset="utf-8" />
   <script>
@@ -27,7 +27,7 @@
       width: 1280px;
       height: 720px;
       overflow: hidden;
-      font-family: system-ui, "PingFang SC", "Noto Sans SC", sans-serif;
+      font-family: system-ui, sans-serif; /* 需要中文时再加本机有的中文字体，不要外链 */
     }
   </style>
 </head>
@@ -59,7 +59,7 @@
 
 - 底字要有对比；不要纯黑配纯灰、浅灰配浅灰。
 - 同一时刻 ≤ 3 个信息点；主标题 ≤ 一行。
-- 安全边距 ≥ 64px。口播是贴 `#gbar` 上方的一行字，不要胶囊/气泡/底托，也不要为字幕空出一大截；`--reel-caption-bottom` 约 40px。
+- 安全边距 ≥ 64px。口播默认贴 `#gbar` 上方一行、无底，不要为字幕空出一大截；`--reel-caption-bottom` 约 40px。颜色、字号用 `--reel-caption-fg` / `--reel-caption-size`。底、圆角、内边距默认不用；题材确实要托底时才用 `--reel-caption-bg` / `--reel-caption-radius` / `--reel-caption-pad`。不要自造第二套字幕。
 - 不要 emoji 当主视觉；不要外链字体 / `<video>`。
 - **禁止**把 `examples/` 的配色、字号、装饰当模板填空。
 
@@ -67,8 +67,9 @@
 
 ```css
 .stage {
-  --reel-caption-size: 20px;         /* 字幕字号 */
-  --reel-caption-fg: currentColor;   /* 别加 caption-bg / radius / pad */
+  --reel-caption-size: 20px;
+  --reel-caption-fg: currentColor;
+  /* 默认不加底。要托底再设 --reel-caption-bg / radius / pad */
   --reel-bar-fill: currentColor;
 }
 ```
@@ -81,7 +82,7 @@
 node tools/subs.mjs reel-out/part-01.timeline.json --out reel-out/part-01.srt
 ```
 
-句子**不要**写进 HTML。面板和截帧读 `part-01.srt`（或 `.timeline.json` / `captions.srt` / `timeline.json`）注入 kit，预览即成片。改词改 sidecar → 看面板 → 再截该段。字幕颜色用 `--reel-caption-fg`；不要自己放带白底圆角的 `#reel-caption`。TTS、字幕、台词稿必须同一句。画面按镜头/意群切，不按句切。
+句子**不要**写进 HTML。面板和截帧读 `part-01.srt`（或 `.timeline.json` / `captions.srt` / `timeline.json`）注入 kit，预览即成片。改词改 sidecar → 看面板 → 再截该段。字幕颜色、字号用 kit 变量；不要自己另放一套 `#reel-caption`。TTS、字幕、台词稿必须同一句。画面按镜头/意群切，不按句切。
 
 ## 全片进度条
 
@@ -130,8 +131,9 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 - `setInterval` / `Date.now()` / `performance.now()` 驱动运动
 - rAF 用墙钟；必须 rAF 时只读 `window.__reelTime`
 - 随机数参与主运动
-- 竖向扫光/扫描线当主运动
 - 数值到终点文案还是进行态（100% 配 LOADING）
+
+扫光/扫描线被看成分割线，或只是与内容无关的装饰时，删掉。不要因此禁止所有扫光。
 
 ## 片型
 
@@ -155,7 +157,7 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 - 台词稿定稿后 TTS 量时再出 srt，不要抄进 HTML。用语像对人讲话：有主语、有停顿、有「所以 / 也就是说」。
 - 用 SVG / DOM 示意图，不要把解说全文堆在画面中央。
 - 底栏用 kit + `gbar.json`，不要手画。
-- 承接：下一段开头沿用上一段结束态的主角图形，不要每段清场换皮。
+- 承接：下一段开头沿用上一段结束态（同一元素、构图或配色），不要每段换一套无关联的皮。
 
 ## 自检（写完过一遍）
 

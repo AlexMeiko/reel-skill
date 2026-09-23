@@ -4,6 +4,7 @@
  * (panel/capture kit). Do not burn libass unless --burn.
  *
  *   node mux.mjs --video scene.mp4 --audio voice.wav --out scene-vo.mp4
+ *   voice.wav is the full mix (joined line audio, or an external recording)
  *   node mux.mjs --video scene.mp4 --subs captions.srt --burn --out scene-vo.mp4
  */
 
@@ -58,7 +59,7 @@ function subtitlesFilter(abs) {
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help || !args.video || !args.out) {
-  console.log(`Usage: node mux.mjs --video scene.mp4 [--audio voice.wav] --out scene-vo.mp4
+  console.log(`Usage: node mux.mjs --video scene.mp4 [--audio full-mix.wav] --out scene-vo.mp4
   captions already live in the video from capture
   --burn --subs file.srt   optional ffmpeg/libass overlay
   --soft --subs file.srt   optional mov_text track`);
