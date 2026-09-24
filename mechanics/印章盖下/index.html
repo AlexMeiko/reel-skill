@@ -1,0 +1,453 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 19 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>印章盖下 · STAMP IMPACT</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #cdc0a5; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: radial-gradient(1240px 800px at 50% 30%, #efe8d7 0%, #e3d9c3 48%, #cbbda1 100%);
+    color: #33291d;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  .stage::after {
+    content: ""; position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background-image: var(--grain); opacity: .42; pointer-events: none;
+  }
+  .world { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+
+  /* 纸张：整张公文纸 */
+  .sheet {
+    position: absolute; left: 92px; top: 60px; width: 1096px; height: 600px;
+    background-color: #fcf8ee;
+    background-image: var(--paper);
+    box-shadow: 0 22px 52px rgba(74,58,32,.26), 0 1px 0 rgba(255,255,255,.9) inset,
+                0 0 0 1px rgba(146,126,90,.30);
+    transform-origin: 780px 370px;
+  }
+  .doc { position: absolute; left: 64px; top: 54px; width: 660px; }
+  .doc .t1 { font-size: 34px; font-weight: 800; letter-spacing: .10em; color: #33291d; line-height: 1; }
+  .doc .t2 { margin-top: 14px; font-family: "Noto Sans Mono CJK SC", monospace;
+             font-size: 12px; letter-spacing: .18em; color: #a08f6d; }
+  .rows { margin-top: 46px; }
+  .row { display: flex; align-items: baseline; gap: 16px; height: 54px; }
+  .row .k { flex: 0 0 84px; font-size: 15px; letter-spacing: .22em; color: #9a8867; }
+  .row .v { flex: 0 0 auto; font-size: 18px; font-weight: 600; letter-spacing: .06em; color: #3d3223; }
+  .row .d { flex: 1 1 auto; height: 1px; border-bottom: 1px dashed #cdbb95; }
+
+  /* 纸张受压高光（形变的光学代理） */
+  .ripple { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; opacity: 0; }
+
+  /* 印章投影：高度代理 —— 越高越淡越大越偏 */
+  .shade {
+    position: absolute; left: 720px; top: 280px; width: 300px; height: 300px;
+    border-radius: 50%; opacity: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(58,42,20,.88) 0 50%,
+                rgba(58,42,20,.42) 66%, rgba(58,42,20,0) 82%);
+  }
+  .fx { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+
+  /* 墨渗光晕：mask 在里层，模糊在外层 —— 若把 filter 写在带 mask 的元素上，
+     模糊结果会被 mask 边界裁掉，光晕就没了 */
+  .bleedBox { position: absolute; left: 720px; top: 280px; width: 300px; height: 300px;
+              filter: blur(7px); opacity: 0; }
+  .bleed {
+    position: absolute; left: 0; top: 0; width: 300px; height: 300px;
+    background: #b0282a;
+    -webkit-mask-image: var(--sealmask); mask-image: var(--sealmask);
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: 50% 50%; mask-position: 50% 50%;
+  }
+  .sealBox { position: absolute; left: 720px; top: 280px; width: 300px; height: 300px; }
+  .ghost {
+    position: absolute; left: 720px; top: 280px; width: 300px; height: 300px; opacity: 0;
+    background: #b0282a;
+    -webkit-mask-image: var(--sealmask); mask-image: var(--sealmask);
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: 50% 50%; mask-position: 50% 50%;
+  }
+  .seal {
+    position: absolute; left: 0; top: 0; width: 300px; height: 300px;
+    background: radial-gradient(circle at 43% 34%, #cb4432 0%, #b62c26 40%,
+                #a02120 68%, #8a1a1c 100%);
+    -webkit-mask-image: var(--sealmask); mask-image: var(--sealmask);
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: 50% 50%; mask-position: 50% 50%;
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="world" id="world">
+    <div class="sheet" id="sheet">
+      <div class="doc">
+        <div class="t1">印章盖下</div>
+        <div class="t2">FX-12 / STAMP IMPACT / T_IMPACT = 1.350s</div>
+        <div class="rows">
+          <div class="row"><span class="k">编号</span><span class="v">REEL-FX-12</span><span class="d"></span></div>
+          <div class="row"><span class="k">日期</span><span class="v">2026.04.11</span><span class="d"></span></div>
+          <div class="row"><span class="k">经办</span><span class="v">特效组</span><span class="d"></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="shade" id="shade"></div>
+    <div class="ripple" id="ripple"></div>
+    <canvas class="fx" id="fx" width="1280" height="720"></canvas>
+    <div class="bleedBox" id="bleedBox"><div class="bleed" id="bleed"></div></div>
+    <div class="ghost" id="ghost2"></div>
+    <div class="ghost" id="ghost1"></div>
+    <div class="sealBox" id="sealBox"><div class="seal" id="seal"></div></div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  var W = 1280, H = 720, TAU = Math.PI * 2;
+
+  /* ================= 时间常量：全片唯一时间真值来源 ================= */
+  var T_DROP   = 0.55;   // 印章开始下落
+  var T_IMPACT = 1.35;   // ★ 接触时刻 —— 字面量常量，全片唯一「事件」
+  var T_TAIL   = 0.55;   // 冲击瞬态窗口长度（震动/回弹/冲击波都相对它归一化）
+  var T_SETTLE = 4.85;   // 墨渗与余振真正停止的时刻（末帧终点值在这里已满）
+
+  var DROP = 260;              // 下落距离 px
+  var IX = 872, IY = 430;      // 冲击点（印面中心）
+  var IR = 130;                // 印面在页面上的半径
+  var SEAL_D = 300;            // 印面元素边长
+  var SR = 190, SPAD = 30;     // 画布上的印面半径 / 留边
+  var SSIZE = (SR + SPAD) * 2;
+
+  /* ================= 纯函数工具 ================= */
+  function hash(i) {           // 确定性伪随机：唯一合法的「随机」来源
+    var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123;
+    return x - Math.floor(x);
+  }
+  function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
+  function span(t, t0, t1) { return t1 > t0 ? clamp((t - t0) / (t1 - t0), 0, 1) : (t >= t1 ? 1 : 0); }
+  function lerp(a, b, u) { return a + (b - a) * u; }
+  function easeOut(u) { var w = 1 - u; return 1 - w * w * w; }
+  function easeIn(u) { return u * u * u; }
+  function easeIn4(u) { return u * u * u * u; }   // 下落专用：更陡的加速，抵消更长的下落窗口
+  function damped(u, A, k, w) { return A * Math.exp(-k * u) * Math.sin(w * u); }
+  function n3(n) { return (Math.round(n * 1000) / 1000).toFixed(3); }
+
+  /* ================= 纸纹 / 颗粒：load 时生成一次并缓存 ================= */
+  function buildGrain(size, specks, amax) {
+    var c = document.createElement('canvas'); c.width = c.height = size;
+    var g = c.getContext('2d');
+    g.clearRect(0, 0, size, size);
+    for (var i = 0; i < specks; i++) {
+      var x = hash(i * 1.37 + 0.11) * size;
+      var y = hash(i * 7.71 + 2.53) * size;
+      var a = hash(i * 3.19 + 5.07) * amax;
+      var dark = hash(i * 5.51 + 8.23) < 0.62;
+      g.fillStyle = dark ? 'rgba(88,70,40,' + a.toFixed(4) + ')'
+                         : 'rgba(255,252,240,' + a.toFixed(4) + ')';
+      var s = 1 + (hash(i * 9.13 + 4.41) < 0.18 ? 1 : 0);
+      g.fillRect(Math.floor(x), Math.floor(y), s, s);
+    }
+    return c.toDataURL('image/png');
+  }
+
+  /* ================= 印面 mask：一次生成，之后只做 mask-size 缩放 ================= */
+  function drawStar(g, cx, cy, R) {
+    g.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var a = -Math.PI / 2 + i * Math.PI / 5;
+      var r = (i % 2 === 0) ? R : R * 0.382;
+      var x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath(); g.fill();
+  }
+  function arcText(g, text, cx, cy, r, a0, a1, outward, font) {
+    g.save(); g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
+    var n = text.length;
+    for (var i = 0; i < n; i++) {
+      var a = n === 1 ? (a0 + a1) / 2 : a0 + (a1 - a0) * i / (n - 1);
+      g.save();
+      g.translate(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      g.rotate(a + (outward ? Math.PI / 2 : -Math.PI / 2));
+      g.fillText(text.charAt(i), 0, 0);
+      g.restore();
+    }
+    g.restore();
+  }
+  function buildSealMask() {
+    var c = document.createElement('canvas');
+    c.width = SSIZE; c.height = SSIZE;
+    var g = c.getContext('2d');
+    var cx = SSIZE / 2, cy = SSIZE / 2;
+    var CJK = '"Noto Sans CJK SC", "Noto Sans CJK JP", sans-serif';
+    g.fillStyle = '#fff'; g.strokeStyle = '#fff';
+
+    g.lineWidth = SR * 0.072;
+    g.beginPath(); g.arc(cx, cy, SR * 0.945, 0, TAU); g.stroke();
+
+    g.lineWidth = SR * 0.020;
+    g.beginPath(); g.arc(cx, cy, SR * 0.830, 0, TAU); g.stroke();
+
+    drawStar(g, cx, cy - SR * 0.010, SR * 0.250);
+
+    arcText(g, '视觉特效库', cx, cy, SR * 0.688, -Math.PI / 2 - 0.98, -Math.PI / 2 + 0.98, true,
+            '700 ' + Math.round(SR * 0.212) + 'px ' + CJK);
+    arcText(g, '印章盖下', cx, cy, SR * 0.645, Math.PI / 2 + 0.64, Math.PI / 2 - 0.64, false,
+            '700 ' + Math.round(SR * 0.168) + 'px ' + CJK);
+
+    /* 毛边 / 做旧：全部由 hash(i) 决定，同一 i 永远同一结果 */
+    var i, a, rr, x, y, s;
+    g.globalCompositeOperation = 'destination-out';
+    for (i = 0; i < 2200; i++) {
+      a = hash(i * 1.7 + 0.31) * TAU;
+      rr = SR * (0.888 + hash(i * 3.3 + 1.1) * 0.135);
+      x = cx + Math.cos(a) * rr; y = cy + Math.sin(a) * rr;
+      s = 0.6 + hash(i * 5.7 + 2.3) * 2.6;
+      g.globalAlpha = 0.06 + hash(i * 7.1 + 4.4) * 0.62;
+      g.beginPath(); g.arc(x, y, s, 0, TAU); g.fill();
+    }
+    for (i = 0; i < 760; i++) {
+      a = hash(i * 2.3 + 11.7) * TAU;
+      rr = SR * Math.sqrt(hash(i * 4.9 + 6.1)) * 0.94;
+      x = cx + Math.cos(a) * rr; y = cy + Math.sin(a) * rr;
+      s = 0.5 + hash(i * 8.3 + 3.3) * 1.8;
+      g.globalAlpha = 0.04 + hash(i * 9.7 + 7.9) * 0.34;
+      g.beginPath(); g.arc(x, y, s, 0, TAU); g.fill();
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    return c.toDataURL('image/png');
+  }
+
+  /* ================= 元素 ================= */
+  var stage = document.getElementById('stage');
+  var world = document.getElementById('world');
+  var sheet = document.getElementById('sheet');
+  var shade = document.getElementById('shade');
+  var ripple = document.getElementById('ripple');
+  var sealBox = document.getElementById('sealBox');
+  var sealEl = document.getElementById('seal');
+  var bleedBox = document.getElementById('bleedBox');
+  var bleedEl = document.getElementById('bleed');
+  var ghost1 = document.getElementById('ghost1');
+  var ghost2 = document.getElementById('ghost2');
+  var fx = document.getElementById('fx');
+  var ctx = fx.getContext('2d');
+
+  stage.style.setProperty('--grain', 'url(' + buildGrain(160, 4200, 0.075) + ')');
+  stage.style.setProperty('--paper', 'url(' + buildGrain(160, 2600, 0.040) + ')');
+  stage.style.setProperty('--sealmask', 'url(' + buildSealMask() + ')');
+
+  /* ================= 冲击后的画布层：全部是 u / us 的闭式函数 ================= */
+  var ND = 34;   // 灰尘粒子
+  var NF = 20;   // 印缘毛边的纤维条数
+
+  function drawFx(t, u, us, soak) {
+    ctx.clearRect(0, 0, W, H);
+    if (t <= T_IMPACT) return;
+
+    /* ① 冲击波：两圈同心环，从印面边缘向外扩散，这是「冲击」的主要证据 */
+    for (var k = 0; k < 2; k++) {
+      var uk = span(t, T_IMPACT + k * 0.09, T_IMPACT + (k === 0 ? 0.46 : 0.86));
+      if (uk <= 0 || uk >= 1) continue;
+      var rr = IR + lerp(0, 190 + k * 130, easeOut(uk));
+      ctx.globalAlpha = Math.pow(1 - uk, 1.7) * (k === 0 ? 0.85 : 0.44);
+      ctx.strokeStyle = '#b0282a';
+      ctx.lineWidth = lerp(11, 1.1, easeOut(uk));
+      ctx.beginPath(); ctx.arc(IX, IY, rr, 0, TAU); ctx.stroke();
+    }
+
+    /* ② 印缘毛边：不是放射状直线，而是沿外圈挤出的「墨疙瘩 + 短纤维」。
+          角度与长度全部由 hash 决定，不用任何随机数源。 */
+    var R_RING = IR * 0.945;
+    for (var j = 0; j < NF; j++) {
+      var uf = span(t, T_IMPACT + hash(j * 4.1 + 1.9) * 0.06, T_IMPACT + 0.30);
+      if (uf <= 0) continue;
+      var ang = hash(j * 2.9 + 0.77) * TAU;
+      var grow = 0.20 * easeOut(uf) + 0.80 * soak;         // 冲击窜出后继续吸墨
+      var L = (7 + hash(j * 6.3 + 3.7) * 21) * grow;
+      if (L < 0.6) continue;
+      var bend = (hash(j * 8.5 + 5.1) - 0.5) * 0.55;
+      var x0 = IX + Math.cos(ang) * (R_RING - 3), y0 = IY + Math.sin(ang) * (R_RING - 3);
+      var x1 = IX + Math.cos(ang + bend) * (R_RING + L), y1 = IY + Math.sin(ang + bend) * (R_RING + L);
+      var mrr = R_RING + L * 0.5;
+      var mx = IX + Math.cos(ang + bend * 0.4) * mrr, my = IY + Math.sin(ang + bend * 0.4) * mrr;
+      ctx.strokeStyle = '#a32226';
+      ctx.globalAlpha = (0.50 - 0.22 * us) * Math.min(1, uf * 6);
+      ctx.lineWidth = 1.5 - 0.4 * us;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo(mx, my, x1, y1); ctx.stroke();
+    }
+    var NB = 13;
+    for (var b = 0; b < NB; b++) {
+      var ub = span(t, T_IMPACT + hash(b * 6.7 + 0.43) * 0.09, T_IMPACT + 0.34);
+      if (ub <= 0) continue;
+      var ab = hash(b * 3.1 + 7.7) * TAU;
+      var rb = R_RING + 1 + hash(b * 5.3 + 2.9) * (3 + 9 * soak);
+      var half = (0.045 + hash(b * 9.1 + 4.3) * 0.135) * (0.5 + 0.5 * soak);
+      ctx.globalAlpha = (0.22 + 0.30 * hash(b * 7.9 + 1.3)) * Math.min(1, ub * 6) * (1 - 0.35 * us);
+      ctx.strokeStyle = '#a32226';
+      ctx.lineWidth = 2.2 + hash(b * 2.7 + 8.1) * 4.4;
+      ctx.beginPath(); ctx.arc(IX, IY, rb, ab - half, ab + half); ctx.stroke();
+    }
+
+    /* ③ 灰尘 / 纸屑：从印面「边缘」被挤出来（从中心出发会被印面挡掉），
+          解析抛物线轨迹 + 淡出，无任何跨帧状态 */
+    for (var i = 0; i < ND; i++) {
+      var ui = span(t, T_IMPACT + hash(i * 5.7 + 2.3) * 0.07, T_IMPACT + 0.40 + hash(i * 7.1 + 4.4) * 0.34);
+      if (ui <= 0 || ui >= 1) continue;
+      var a2 = hash(i * 1.7 + 0.31) * TAU;
+      var r0 = IR * (0.86 + hash(i * 11.3 + 6.6) * 0.22);
+      var sp = 60 + hash(i * 3.3 + 1.1) * 190;
+      var d = sp * easeOut(ui);
+      var px = IX + Math.cos(a2) * (r0 + d);
+      var py = IY + Math.sin(a2) * (r0 + d) * 0.82 + 52 * ui * ui;
+      var sz = (1.5 + hash(i * 9.3 + 5.5) * 3.4) * (1 - ui * 0.5);
+      ctx.globalAlpha = Math.pow(1 - ui, 2) * 0.78;
+      ctx.fillStyle = (i % 3 === 0) ? '#8a6b45' : '#bfa87f';
+      ctx.beginPath(); ctx.arc(px, py, sz, 0, TAU); ctx.fill();
+    }
+
+    /* ④ 墨渗前沿：盖下之后仍有一个「正在渗」的软前沿缓慢外扩，
+          让收束段保持连续可读的位移；它是墨量本身，不是装饰扫光 */
+    /* ④ 墨渗前沿：一个「不规则闭合轮廓」+ 前方淡湿晕。
+          它不是装饰扫描线 —— 它标的就是「墨已经润到哪儿」，
+          盖下之后仍在缓慢推进，让收束段保持连续可读的位移。
+          轮廓的手抖与相移都由角度解析式给出，仍然只是 t 的函数。 */
+    var uw = span(t, T_IMPACT + 0.62, T_IMPACT + 3.10);
+    if (uw > 0 && uw < 1) {
+      var wbase = R_RING + 14 + 150 * easeOut(uw);
+      var fade = Math.sin(Math.PI * uw);
+      ctx.beginPath();
+      for (var s2 = 0; s2 <= 72; s2++) {
+        var aa = s2 / 72 * TAU;
+        var wob = 5.5 * (Math.sin(aa * 5 + 1.1 + soak * 0.9) * 0.5
+                       + Math.sin(aa * 11 + 2.3 - soak * 1.4) * 0.3
+                       + Math.sin(aa * 23 + 0.4) * 0.2);
+        var rx = wbase + wob;
+        var xx = IX + Math.cos(aa) * rx, yy = IY + Math.sin(aa) * rx;
+        if (s2 === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+      }
+      ctx.closePath();
+      ctx.globalAlpha = 0.075 * fade;
+      ctx.strokeStyle = '#b0282a';
+      ctx.lineWidth = 6;
+      ctx.stroke();
+      var wgd = ctx.createRadialGradient(IX, IY, wbase - 10, IX, IY, wbase + 92);
+      wgd.addColorStop(0, 'rgba(176,40,42,0)');
+      wgd.addColorStop(0.34, 'rgba(176,40,42,' + n3(0.085 * fade) + ')');
+      wgd.addColorStop(1, 'rgba(176,40,42,0)');
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = wgd;
+      ctx.fillRect(IX - wbase - 100, IY - wbase - 100, 2 * (wbase + 100), 2 * (wbase + 100));
+    }
+
+    /* ④ 落印瞬间的墨色冲击闪：极短，只持续 2–3 帧 */
+    var fl = Math.exp(-u * 26) * (1 - span(t, T_IMPACT + 0.12, T_IMPACT + 0.2));
+    if (fl > 0.004) {
+      var gd = ctx.createRadialGradient(IX, IY, IR * 0.2, IX, IY, IR * 2.0);
+      gd.addColorStop(0, 'rgba(150,26,28,' + (0.30 * fl).toFixed(4) + ')');
+      gd.addColorStop(0.55, 'rgba(150,26,28,' + (0.10 * fl).toFixed(4) + ')');
+      gd.addColorStop(1, 'rgba(150,26,28,0)');
+      ctx.globalAlpha = 1; ctx.fillStyle = gd;
+      ctx.fillRect(IX - IR * 2, IY - IR * 2, IR * 4, IR * 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* ================= 主绘制：画面 = f(t) ================= */
+  window.reelDraw = function (raw) {
+    var t = clamp(raw, 0, 5.0);
+
+    /* ---- 冲击后的一切都写成 u = t - T_IMPACT 的函数 ---- */
+    var u     = span(t, T_IMPACT, T_IMPACT + T_TAIL);   // 冲击瞬态 0→1
+    var us    = span(t, T_IMPACT, T_SETTLE);            // 慢过程 0→1
+    var soak  = 0.55 * easeOut(Math.min(us / 0.10, 1)) + 0.45 * us;  // 墨渗（先快后慢，但永不归零）
+    var dropP = span(t, T_DROP, T_IMPACT);
+    var vn    = (t > T_DROP && t < T_IMPACT) ? dropP * dropP * dropP : 0;    // 落体速度（easeIn 的导数，归一化）
+    var gone  = span(t, T_IMPACT, T_IMPACT + 0.30);                  // 「实体印章」→「墨迹」的过渡
+
+    /* ---- ① 画面震动：A·e^(-k·u)·sin(w·u)，作用在 .world 上 ---- */
+    var shake = damped(u, 6, 9, 52);
+
+    /* ---- ② 下落 ---- */
+    var dy = -DROP * (1 - easeIn4(dropP));
+
+    /* ---- ③ 印章缩放回弹：先压扁再回弹，也是衰减正弦 ---- */
+    var bounce = 1 - damped(u, 0.055, 7, 26);
+    var sy = bounce * (1 + 0.075 * vn);
+    var sx = bounce * (1 - 0.035 * vn);
+
+    /* ---- ④ 墨迹扩散：mask-size 从 100% 长到 105.6%，墨色同时变淡 ---- */
+    var maskPct = 100 + 5.6 * soak;
+    var inkA = 1 - 0.085 * us;
+
+    /* ---- ⑤ 纸张形变：受压后极小的鼓包 + 回弹 ---- */
+    var warp = 1 + 0.0035 * Math.exp(-7 * u) * Math.sin(30 * u + 0.5);
+
+    /* ---- ⑥ 印章投影：高度代理；落定后投影归零（实体变成墨迹） ---- */
+    var elev = 1 - dropP;
+    var shOff = 4 + 26 * elev;
+    var shBlur = 6 + 30 * elev;
+    var shA = (0.36 - 0.24 * elev) * (1 - gone);
+
+    /* ---- 写 DOM：每个元素每帧只写一次 ---- */
+    world.style.transform = 'translate3d(' + n3(shake) + 'px,' + n3(shake * 0.62) + 'px,0)';
+
+    sheet.style.transform = 'scale(' + n3(warp) + ')';
+
+    shade.style.transform = 'translate3d(0,' + n3(shOff) + 'px,0) scale(' + n3(1 + shOff / 420) + ')';
+    shade.style.filter = 'blur(' + n3(shBlur) + 'px)';
+    shade.style.opacity = n3(shA);
+
+    var ripP = span(t, T_IMPACT, T_IMPACT + 0.72);
+    if (ripP > 0 && ripP < 1) {
+      var rrad = IR + lerp(0, 190, easeOut(ripP));
+      ripple.style.background = 'radial-gradient(circle at ' + IX + 'px ' + IY + 'px, rgba(255,255,255,0) '
+        + n3(rrad - 26) + 'px, rgba(255,253,244,' + n3(0.55 * Math.pow(1 - ripP, 1.6)) + ') '
+        + n3(rrad) + 'px, rgba(120,98,62,' + n3(0.20 * Math.pow(1 - ripP, 2.2)) + ') '
+        + n3(rrad + 16) + 'px, rgba(255,255,255,0) ' + n3(rrad + 40) + 'px)';
+      ripple.style.opacity = '1';
+    } else {
+      ripple.style.opacity = '0';
+    }
+
+    var sz = SEAL_D + 'px ' + SEAL_D + 'px';
+    sealBox.style.transform = 'translate3d(0,' + n3(dy) + 'px,0) scale(' + n3(sx) + ',' + n3(sy) + ')';
+    sealEl.style.maskSize = n3(maskPct) + '% ' + n3(maskPct) + '%';
+    sealEl.style.webkitMaskSize = sealEl.style.maskSize;
+    sealEl.style.opacity = n3(inkA);
+
+    bleedBox.style.transform = 'translate3d(0,' + n3(dy) + 'px,0) scale('
+      + n3(bounce * (1 + 0.07 * soak)) + ')';
+    bleedBox.style.opacity = n3(0.46 * easeOut(span(t, T_IMPACT, T_IMPACT + 0.22)) * (1 - 0.38 * soak));
+    bleedEl.style.maskSize = n3(maskPct + 1.6) + '% ' + n3(maskPct + 1.6) + '%';
+    bleedEl.style.webkitMaskSize = bleedEl.style.maskSize;
+
+    /* 下落拖尾残影：解析式，偏移量 ∝ 当前速度，接触即消失 */
+    var g1o = 0.26 * vn, g2o = 0.11 * vn;
+    ghost1.style.transform = 'translate3d(0,' + n3(dy - 27 * vn) + 'px,0) scale(' + n3(sx) + ',' + n3(sy) + ')';
+    ghost1.style.opacity = n3(g1o);
+    ghost2.style.transform = 'translate3d(0,' + n3(dy - 58 * vn) + 'px,0) scale(' + n3(sx) + ',' + n3(sy) + ')';
+    ghost2.style.opacity = n3(g2o);
+
+    drawFx(t, u, us, soak);
+  };
+
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>

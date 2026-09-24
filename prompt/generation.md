@@ -44,6 +44,9 @@
 
 样例只抄契约：[contract.html](../examples/contract.html)。不要抄它的样子。
 
+需要某种运动的参考实现：[../mechanics/INDEX.md](../mechanics/INDEX.md)（19 个可精确 seek 的特效）。
+机制可以直接用，配色按题材由你定 —— 沿用或整套换掉都行。
+
 ## 风格（你选，技能不指定）
 
 视觉由内容决定。硬约束只有可读性：
@@ -52,7 +55,7 @@
 - 同一时刻 ≤ 3 个信息点；主标题 ≤ 一行。
 - 安全边距 ≥ 64px。口播默认贴 `#gbar` 上方一行、无底，不要为字幕空出一大截；`--reel-caption-bottom` 约 40px。颜色、字号用 `--reel-caption-fg` / `--reel-caption-size`。底、圆角、内边距默认不用；题材确实要托底时才用 `--reel-caption-bg` / `--reel-caption-radius` / `--reel-caption-pad`。不要自造第二套字幕。
 - 不要 emoji 当主视觉；不要外链字体 / `<video>`。
-- **禁止**把 `examples/` 的配色、字号、装饰当模板填空。
+- 配色、字号、装饰按题材由你定。`examples/` 与 `mechanics/` 里的都是各自的一套搭配 —— 合用就沿用，不合用就整套换掉，机制不受影响。
 
 贴合皮肤只改变量：
 
@@ -110,10 +113,13 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 
 **画线**：`stroke-dasharray: <len>` + `stroke-dashoffset` 从 len 到 0。  
 **计数/进度条/游标**：必须在 `reelDraw(t)` 里用**同一次**插值更新，禁止 CSS `scaleX` 一条、JS 数字另一条。  
+**场景内读数**：进度 %、状态文案、计数从同一个变量派生。不要用 `t / REEL.duration` 当分母——最后一帧是 `(帧数-1)/fps`，会永远停在 99%。写字面量结束时刻：`var prog = reel.clamp(t / T_END, 0, 1)`（`t >= T_END` 就满格）。  
 **运镜**：`.stage` 内一层 `.world` 做 `transform`，不要改 width/height。  
 **结构**：看起来在卡片/窗口里的内容，必须是该容器的 DOM 子节点，不要在 `.stage` 上绝对定位叠上去。
 
 `reelDraw` 里可用（kit 注入后存在）：`reel.span(t,t0,t1)`、`reel.lerp`、`reel.clamp`、`reel.easeOut` / `reel.easeInOut`、`reel.captionAt(t)`。
+
+复杂运动（拖尾、余辉、扫描、排名插值、粒子轨迹、转场遮罩）的 seekable 写法见 [../mechanics/INDEX.md](../mechanics/INDEX.md)。
 
 禁止：
 
@@ -168,6 +174,6 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 - 字幕在 sidecar，面板/截帧注入 kit，不要写进 HTML
 - 换句不必换图；换图时口播已讲到这一层
 - 无外链字体、无 `<video>`、无 `infinite`
-- 配色不是从 examples 抄的
+- 配色按题材定。examples / mechanics 合用就沿用，不合用再换；定下来的写进 knowledge.md
 - 多段时每段 HTML 的底/字/强调色与 knowledge.md 一致
 - 封面是 1920×1080 与 1080×1440 两张 PNG，无进度条、字幕、时长

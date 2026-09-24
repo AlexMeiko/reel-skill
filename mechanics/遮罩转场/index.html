@@ -1,0 +1,515 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 27 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>特效 08 · 遮罩揭示 / 场景转场 —— 主方案（clip-path + mask-image 统一 mask(p)）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #05080c; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #05080c;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+    /* 灰度抗锯齿：同一 t 的两次截帧在 LCD 次像素 AA 下可能差 1/255（见 PATTERNS §6） */
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "Noto Sans Mono CJK SC", ui-monospace, monospace; }
+
+  /* ============ 两个场景层 + 一个完成态层，全部 1280×720 ============ */
+  .scene { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+
+  /* 场景 A：浅纸稿 */
+  .sA {
+    --bg: #f2eee3; --panel: #fffdf6; --ink: #1b2027; --mut: #6d6659;
+    --rule: #d7cdb9; --acc: #a8400f; --acc2: #14625e; --edge: rgba(0,0,0,.10);
+  }
+  /* 场景 B：深墨稿（同一张信息图，只换配色） */
+  .sB {
+    --bg: #0d151e; --panel: #16222f; --ink: #eaf1f8; --mut: #8ea3b7;
+    --rule: #2a3b4e; --acc: #ffb347; --acc2: #4fd1c5; --edge: rgba(255,255,255,.10);
+    background: #0d151e; color: #eaf1f8;
+  }
+  /* 场景 C = B 的结束态「付印版」。底色翻成 B 家族里的暖强调色，
+     这样第 6 段（径向时钟扫）才有可见的明暗边界 —— 第一版 C 与 B 同为深色，
+     整段扫过去画面几乎没变化，等于白做一次转场。 */
+  .sC {
+    --bg: #e8a92f; --panel: #fdf6e6; --ink: #221a0b; --mut: #5c4620;
+    --rule: #c98f22; --acc: #a8400f; --acc2: #1c5b56;
+  }
+  .scene { background: var(--bg); color: var(--ink); }
+
+  /* ---- 头部 ---- */
+  .kicker {
+    position: absolute; left: 72px; top: 62px;
+    font-size: 16px; line-height: 20px; letter-spacing: .20em; color: var(--mut);
+  }
+  .title {
+    position: absolute; left: 72px; top: 88px;
+    font-size: 40px; line-height: 50px; font-weight: 700; letter-spacing: .01em;
+  }
+  .sub {
+    position: absolute; left: 72px; top: 146px;
+    font-size: 18px; line-height: 25px; color: var(--mut);
+  }
+  .meta { position: absolute; right: 72px; top: 62px; font-size: 14px; line-height: 20px; color: var(--mut); text-align: right; }
+  .badge {
+    position: absolute; right: 72px; top: 96px;
+    font-size: 15px; line-height: 22px; color: var(--acc);
+    border: 1px solid var(--acc); border-radius: 4px; padding: 3px 10px;
+  }
+  .titlebar { position: absolute; left: 72px; top: 176px; width: 88px; height: 3px; background: var(--acc2); }
+
+  /* ---- 六张卡片：就是六种转场的目录 ---- */
+  .grid {
+    position: absolute; left: 72px; top: 200px; width: 1136px; height: 366px;
+    display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr);
+    gap: 22px 24px;
+  }
+  .card {
+    position: relative; background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 6px; overflow: hidden;
+  }
+  .idx { position: absolute; left: 16px; top: 13px; font-size: 13px; line-height: 18px; color: var(--mut); letter-spacing: .10em; }
+  .glyph { position: absolute; right: 14px; top: 12px; width: 76px; height: 46px; color: var(--mut); opacity: .85; }
+  .glyph svg { display: block; width: 76px; height: 46px; }
+  .cname { position: absolute; left: 16px; top: 46px; font-size: 22px; line-height: 28px; font-weight: 700; }
+  .cen { position: absolute; left: 16px; top: 78px; font-size: 12px; line-height: 16px; color: var(--mut); letter-spacing: .10em; text-transform: uppercase; }
+  .cexpr { position: absolute; left: 16px; top: 103px; font-size: 13px; line-height: 17px; color: var(--acc); white-space: nowrap; }
+  .done { position: absolute; left: 16px; top: 134px; width: 54px; height: 3px; background: var(--acc); }
+
+  /* ---- 同一 p 驱动的柔光：出场景向入场景的底色靠拢 ---- */
+  .veil { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; opacity: 0; }
+
+  /* ============ 场景内仪表：六段进度（与 mask 同源） ============ */
+  .hud {
+    /* 必须显式抬 z-index：三个场景层被写了 z-index 1/2/3，
+       z-index:auto 的仪表会被整片盖住（第一版就是这么消失的）。 */
+    z-index: 10;
+    position: absolute; left: 72px; top: 580px; width: 1136px; height: 76px;
+    background: rgba(8, 13, 20, .90);
+    border: 1px solid rgba(122, 162, 200, .20);
+    border-radius: 8px; box-sizing: border-box;
+    color: #9fb2c4;
+  }
+  .hud .labels { position: absolute; left: 12px; top: 11px; width: 1110px; height: 18px; }
+  .hud .lab {
+    position: absolute; top: 0; width: 185px; text-align: center;
+    font-size: 13px; line-height: 18px; color: #6d8199; white-space: nowrap;
+  }
+  .hud .track { position: absolute; left: 12px; top: 35px; width: 1110px; height: 6px; }
+  .hud .seg { position: absolute; top: 0; width: 181px; height: 6px; background: rgba(122, 162, 200, .18); border-radius: 3px; }
+  .hud .fill { position: absolute; left: 0; top: 0; width: 0; height: 6px; background: #4fd1c5; border-radius: 3px; }
+  .hud .cap { position: absolute; left: 14px; top: 50px; font-size: 12px; line-height: 16px; color: #6d8199; }
+  .hud canvas { position: absolute; right: 14px; top: 50px; width: 260px; height: 16px; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="scene sA" id="scA"></div>
+  <div class="scene sB" id="scB"></div>
+  <div class="scene sC" id="scC"></div>
+  <div class="veil" id="veil"></div>
+  <div class="hud" id="hud">
+    <div class="labels" id="labels"></div>
+    <div class="track" id="track"></div>
+    <div class="cap">同一个 mask(p) 驱动六种几何 · 没有第二条时间线</div>
+    <canvas id="ro" width="260" height="16"></canvas>
+  </div>
+</div>
+<script>
+(function () {
+  /* ===================================================================================
+     铁律：画面 = f(t)。
+     全片只有一个进度量 pe；六种转场是同一个签名 mask(kind, pe) 下的六种实现；
+     场景内的进度条 / 读数 / 柔光全部由同一个 pe 派生。
+     =================================================================================== */
+  if (!window.reel) {
+    window.reel = {
+      clamp: function (x, a, b) { return x < a ? a : (x > b ? b : x); },
+      span: function (t, t0, t1) { return t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : (t >= t1 ? 1 : 0); },
+      lerp: function (a, b, u) { return a + (b - a) * u; },
+      easeInOut: function (u) { u = u < 0 ? 0 : u > 1 ? 1 : u; return u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; }
+    };
+  }
+  var K = window.reel;
+
+  var SW = 1280, SH = 720;
+
+  /* ---------- 时间轴：唯一的一张表，没有任何第二处开始/结束时刻 ---------- */
+  var LEAD = 0.40;            // 静止起手：完整的 A 场景
+  var SEG = 0.70;             // 每段转场
+  var NSEG = 6;
+  var T_END = LEAD + SEG * NSEG;   // 4.60 —— 字面量结束时刻（不是 duration）
+  var DUR = 5.0;
+
+  function hash(i) { var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123; return x - Math.floor(x); }
+  function hash2(x, y) { return hash(y * 191.3 + x * 7.7 + 3.1); }
+
+  /* 唯一的缓动：六种几何共用（导数 ∈ [0.8,1.2]，全程都在动，不会出现定格） */
+  function shape(u) {
+    u = K.clamp(u, 0, 1);
+    return u - 0.20 * Math.sin(6.283185307179586 * u) / 6.283185307179586;
+  }
+
+  /* ===================================================================================
+     噪点溶解：确定性噪点图集
+     NW×NH 的 hash(x,y) 阈值场，做成 LV 帧「累积」切片横向铺开。
+     mask-repeat: repeat-y —— 纵向重复的是同一张切片，于是 k（源像素→屏幕像素）
+     可以自由变化，用来做「颗粒由粗到细」，而画面仍然被噪声铺满。
+     生成只在 load 时做一次并缓存为 dataURL（见 SPEC 的确定性要求）。
+     =================================================================================== */
+  var NW = 160, NH = 90, LV = 25;
+  var ATLAS = (function () {
+    var c = document.createElement("canvas");
+    c.width = NW * LV; c.height = NH;
+    var g = c.getContext("2d");
+    var img = g.createImageData(NW * LV, NH), d = img.data;
+    for (var j = 0; j < LV; j++) {
+      var thr = j / (LV - 1);                      // j=0 → 全空；j=LV-1 → 全覆盖
+      for (var y = 0; y < NH; y++) {
+        for (var x = 0; x < NW; x++) {
+          var o = (y * NW * LV + j * NW + x) * 4;
+          d[o] = 255; d[o + 1] = 255; d[o + 2] = 255;
+          d[o + 3] = hash2(x, y) < thr ? 255 : 0;
+        }
+      }
+    }
+    g.putImageData(img, 0, 0);
+    return c.toDataURL("image/png");
+  })();
+
+  /* ===================================================================================
+     六种遮罩 —— 同一个签名 mask(kind, pe) -> 遮罩描述
+       返回 { clip }            用 clip-path 实现（几何类）
+       返回 { mask, size, pos } 用 mask-image 实现（位图/渐变类）
+     p = 0 → 完全遮住（看到基场景）；p = 1 → 完全显示（看到目标场景）
+     =================================================================================== */
+  function mCircle(p) {
+    var r = (1010 * p).toFixed(2);
+    return { clip: "circle(" + r + "px at 470px 330px)" };
+  }
+
+  function mBlinds(p) {
+    /* 12 条竖条，每条从自己的中轴向外张开；width 在 p=1 恰好等于节距 → 覆盖率 100%。
+       （第一版写成固定条宽 0.56 节距，p=1 只覆盖 56%，被 #selftest 的覆盖率曲线当场抓住。） */
+    var N = 12, S = SW / N, d = [];
+    for (var k = 0; k < N; k++) {
+      var dist = Math.abs(k - (N - 1) / 2) / ((N - 1) / 2);   // 0 = 中间条，1 = 最外侧
+      var u = K.clamp((p - 0.34 * dist) / 0.66, 0, 1);        // 中间先开，向两侧错峰
+      var bw = S * u;
+      var x = k * S + (S - bw) / 2;
+      d.push("M" + x.toFixed(1) + " 0h" + bw.toFixed(1) + "v720h" + (-bw).toFixed(1) + "Z");
+    }
+    return { clip: 'path("' + d.join(" ") + '")' };
+  }
+
+  function mWipe(p) {
+    var SL = 300;
+    var xt = -SL + p * (SW + 2 * SL);       // 斜边在画面顶部的 x
+    var xb = xt - SL;                        // 底部更靠左 → 斜向
+    var s = function (v) { return v.toFixed(1) + "px"; };
+    return { clip: "polygon(" + s(-900) + " 0px," + s(xt) + " 0px," + s(xb) + " 720px," + s(-900) + " 720px)" };
+  }
+
+  function mChecker(p) {
+    var COLS = 16, ROWS = 9, cw = SW / COLS, ch = SH / ROWS, d = [];
+    for (var r = 0; r < ROWS; r++) {
+      for (var c = 0; c < COLS; c++) {
+        var i = r * COLS + c;
+        var par = (r + c) % 2;
+        var dx = Math.abs(c - (COLS - 1) / 2) / ((COLS - 1) / 2);
+        var dy = Math.abs(r - (ROWS - 1) / 2) / ((ROWS - 1) / 2);
+        var thr = 0.44 * ((dx + dy) / 2) + 0.46 * par + 0.08 * hash(i);
+        if (p > thr) {
+          d.push("M" + (c * cw) + " " + (r * ch) + "h" + cw + "v" + ch + "h" + (-cw) + "Z");
+        }
+      }
+    }
+    /* p 很小时一个格子都还没亮，d 是空的。**绝对不能**返回 path("") ——
+       实测（_probe/probe7.html）：path("") 被 Chromium 判为非法值直接丢弃，
+       于是元素保留上一段留下的 clip-path，画面变成「上一段的遮罩还在」，
+       而且这个错误是按 seek 路径变化的（verify 的「换 seek 路径」检查就是抓它）。
+       空路径要写成合法的零面积值：path("M0 0Z") 实测覆盖率 0%。 */
+    if (d.length === 0) return { clip: 'path("M0 0Z")' };
+    return { clip: 'path("' + d.join(" ") + '")' };
+  }
+
+  function mDissolve(p) {
+    var k = 8 - 4 * p;                        // 源像素 → 屏幕像素：8px（粗）→ 4px（细）
+    var j = Math.round(p * (LV - 1));
+    var imgW = NW * LV * k, imgH = NH * k;
+    return {
+      mask: 'url("' + ATLAS + '")',
+      size: imgW.toFixed(2) + "px " + imgH.toFixed(2) + "px",
+      pos: (-j * NW * k).toFixed(2) + "px 0px"
+    };
+  }
+
+  function mSweep(p) {
+    /* from 0deg = 从 12 点开始顺时针；a=0 全遮住，a=360 全覆盖。
+       #selftest 里的角度模型用的就是这套约定（atan2(x, -y)）。
+       注意 p→1 必须走「整片不透明」这一支：否则软边那一小段透明扇区会在 12 点
+       留下一道贯穿到圆心的暗缝（第一版末帧上就有这道缝）。 */
+    var a = p * 360, soft = 1.6;
+    if (a + soft >= 360) {
+      return { mask: "conic-gradient(from 0deg at 640px 360px, #000 0deg, #000 360deg)" };
+    }
+    var a0 = Math.max(0, a - soft).toFixed(2), a1 = (a + soft).toFixed(2);
+    return {
+      mask: "conic-gradient(from 0deg at 640px 360px, #000 0deg, #000 " + a0 +
+            "deg, rgba(0,0,0,0) " + a1 + "deg, rgba(0,0,0,0) 360deg)"
+    };
+  }
+
+  /* 六种转场 = 六种 mask 实现 + 同一个签名。表达式一栏直接写在画面上，便于复核。 */
+  var MASKS = [
+    { id: "circle",   cn: "圆形扩散",   en: "circle iris",    expr: "circle(r)   r = 1010 * p",              fn: mCircle },
+    { id: "blinds",   cn: "纵向百叶窗", en: "vertical blinds", expr: "path() x12   h = 720 * u",             fn: mBlinds },
+    { id: "wipe",     cn: "斜向擦除",   en: "diagonal wipe", expr: "polygon()   x = -300 + 1580 * p",      fn: mWipe },
+    { id: "checker",  cn: "棋盘格",     en: "checkerboard",  expr: "path() x144   p > thr(par, D, hash)",  fn: mChecker },
+    { id: "dissolve", cn: "噪点溶解",   en: "noise dissolve", expr: "mask-image   h(x,y) < p",             fn: mDissolve },
+    { id: "sweep",    cn: "径向时钟扫", en: "radial sweep",  expr: "conic-gradient   a = 360 * p",         fn: mSweep }
+  ];
+
+  /* 每一段的 (基场景, 目标场景)。第 6 段把 B 的「完成态」揭示出来 —— 末帧必须是 B 的结束态。
+     A↔B 交替是为了不出现「回闪」：每段的起点都正好是上一段的终点。 */
+  var ROLES = [
+    { base: "scA", top: "scB" }, { base: "scB", top: "scA" },
+    { base: "scA", top: "scB" }, { base: "scB", top: "scA" },
+    { base: "scA", top: "scB" }, { base: "scB", top: "scC" }
+  ];
+  var BG = { scA: "#f2eee3", scB: "#0d151e", scC: "#e8a92f" };
+
+  /* ===================================================================================
+     两个（三个）场景的内容：同一张信息图，只有配色 / 结束态不同
+     =================================================================================== */
+  var GLYPH = {
+    circle: '<svg viewBox="0 0 76 46"><circle cx="30" cy="24" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="30" cy="24" r="15" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".5"/><circle cx="30" cy="24" r="21.5" fill="none" stroke="currentColor" stroke-width="1" opacity=".25"/></svg>',
+    blinds: '<svg viewBox="0 0 76 46"><g fill="currentColor" opacity=".55"><rect x="6" y="11" width="6" height="24"/><rect x="20" y="11" width="6" height="24"/><rect x="34" y="11" width="6" height="24"/><rect x="48" y="11" width="6" height="24"/><rect x="62" y="11" width="6" height="24"/></g></svg>',
+    wipe: '<svg viewBox="0 0 76 46"><polygon points="4,8 44,8 26,38 4,38" fill="currentColor" opacity=".5"/><path d="M44 8 L26 38" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+    checker: '<svg viewBox="0 0 76 46"><g fill="currentColor" opacity=".55"><rect x="8" y="7" width="12" height="10"/><rect x="32" y="7" width="12" height="10"/><rect x="56" y="7" width="12" height="10"/><rect x="20" y="19" width="12" height="10"/><rect x="44" y="19" width="12" height="10"/><rect x="8" y="31" width="12" height="10"/><rect x="32" y="31" width="12" height="10"/><rect x="56" y="31" width="12" height="10"/></g></svg>',
+    dissolve: '<svg viewBox="0 0 76 46"><g fill="currentColor" opacity=".55"><rect x="7" y="9" width="5" height="5"/><rect x="19" y="6" width="4" height="4"/><rect x="34" y="12" width="5" height="5"/><rect x="52" y="7" width="4" height="4"/><rect x="64" y="14" width="5" height="5"/><rect x="12" y="21" width="4" height="4"/><rect x="27" y="24" width="5" height="5"/><rect x="44" y="20" width="4" height="4"/><rect x="59" y="26" width="5" height="5"/><rect x="8" y="33" width="5" height="5"/><rect x="22" y="36" width="4" height="4"/><rect x="38" y="32" width="4" height="4"/><rect x="51" y="37" width="5" height="5"/><rect x="66" y="33" width="4" height="4"/></g></svg>',
+    sweep: '<svg viewBox="0 0 76 46"><path d="M34 24 L34 3 A21 21 0 0 1 54 17 Z" fill="currentColor" opacity=".5"/><path d="M34 24 L34 3" stroke="currentColor" stroke-width="2"/><circle cx="34" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".4"/></svg>'
+  };
+
+  function buildScene(host, isFinal) {
+    var h = document.createElement("div");
+    h.innerHTML =
+      '<div class="kicker">特效 08 · 遮罩揭示 / 场景转场</div>' +
+      '<div class="title">两个场景，一个 mask(p)</div>' +
+      '<div class="sub">' + (isFinal
+        ? "六种几何全部走完，场景 B 完整呈现"
+        : "六种几何依次揭示 B 场景；p 是全片唯一的进度量") + '</div>' +
+      '<div class="meta mono">1280 × 720 · 30 fps · 5.00 s</div>' +
+      '<div class="titlebar"></div>' +
+      (isFinal ? '<div class="badge">揭示完成 · 6 / 6</div>' : '');
+    host.appendChild(h);
+
+    var grid = document.createElement("div");
+    grid.className = "grid";
+    for (var i = 0; i < MASKS.length; i++) {
+      var m = MASKS[i], c = document.createElement("div");
+      c.className = "card";
+      c.innerHTML =
+        '<div class="idx mono">0' + (i + 1) + '</div>' +
+        '<div class="glyph">' + GLYPH[m.id] + '</div>' +
+        '<div class="cname">' + m.cn + '</div>' +
+        '<div class="cen mono">' + m.en + '</div>' +
+        '<div class="cexpr mono">' + m.expr + '</div>' +
+        (isFinal ? '<div class="done"></div>' : '');
+      grid.appendChild(c);
+    }
+    host.appendChild(grid);
+  }
+
+  var els = {
+    scA: document.getElementById("scA"), scB: document.getElementById("scB"), scC: document.getElementById("scC"),
+    veil: document.getElementById("veil"), stage: document.getElementById("stage"),
+    labels: document.getElementById("labels"), track: document.getElementById("track"), ro: document.getElementById("ro")
+  };
+  buildScene(els.scA, false);
+  buildScene(els.scB, false);
+  buildScene(els.scC, true);
+
+  /* 仪表的静态部分：六段刻度 + 六个中文名（都是字面量，永不改动文本节点） */
+  var SEGW = 185, GAP = 4, FILLS = [], LABELS = [];
+  (function () {
+    for (var i = 0; i < NSEG; i++) {
+      var s = document.createElement("div");
+      s.className = "seg";
+      s.style.left = (i * SEGW) + "px";
+      var f = document.createElement("div");
+      f.className = "fill";
+      s.appendChild(f);
+      els.track.appendChild(s);
+      FILLS.push(f);
+
+      var l = document.createElement("div");
+      l.className = "lab";
+      l.style.left = (i * SEGW) + "px";
+      l.textContent = MASKS[i].cn;
+      els.labels.appendChild(l);
+      LABELS.push(l);
+    }
+  })();
+
+  var roCtx = els.ro.getContext("2d");
+  var MONO = '"Noto Sans Mono CJK SC", ui-monospace, monospace';
+
+  /* 每帧变化的读数只画进 canvas：DOM 文本每帧改字会在高负载下触发字形栅格化 1/255 抖动
+     （PATTERNS §6.1）。这里一个 textContent= 都没有。 */
+  function drawReadout(state, idx, pe) {
+    var c = roCtx;
+    c.clearRect(0, 0, 260, 16);
+    c.font = "13px " + MONO;
+    c.textBaseline = "middle";
+    c.fillStyle = state === "DONE" ? "#4fd1c5" : "#9fb2c4";
+    c.textAlign = "left";
+    c.fillText(state, 0, 8);
+    c.fillStyle = "#7f93a8";
+    c.fillText("0" + (idx + 1) + "/06", 96, 8);
+    c.textAlign = "right";
+    c.fillText("p " + pe.toFixed(2), 260, 8);
+  }
+
+  /* 遮罩描述写进元素：同一帧每个属性只写一次；mask 字符串做记忆化，避免每帧重解析 226KB dataURL */
+  function applyMask(el, spec) {
+    el.style.clipPath = spec.clip || "none";
+    var mi = spec.mask || "none";
+    if (el.__mi !== mi) { el.style.webkitMaskImage = mi; el.style.maskImage = mi; el.__mi = mi; }
+    var sz = spec.size || "1280px 720px", ps = spec.pos || "0px 0px";
+    el.style.webkitMaskSize = sz; el.style.maskSize = sz;
+    el.style.webkitMaskPosition = ps; el.style.maskPosition = ps;
+    el.style.webkitMaskRepeat = "repeat-y"; el.style.maskRepeat = "repeat-y";
+  }
+  function clearMask(el) {
+    el.style.clipPath = "none";
+    if (el.__mi !== "none") { el.style.webkitMaskImage = "none"; el.style.maskImage = "none"; el.__mi = "none"; }
+  }
+
+  var lastSeg = -1;
+  window.reelDraw = function (t) {
+    /* ---- 唯一一次进度插值 ---- */
+    var raw = (t - LEAD) / SEG;
+    var seg = Math.floor(raw);
+    if (seg < 0) seg = 0; if (seg > NSEG - 1) seg = NSEG - 1;
+    var p = K.clamp(raw - seg, 0, 1);
+    var pe = shape(p);                     // ← 全片唯一的进度量
+
+    /* ---- 场景层角色（由 seg 派生，不存状态） ---- */
+    var role = ROLES[seg];
+    var A = els.scA, B = els.scB, C = els.scC;
+    var all = [A, B, C];
+    for (var i = 0; i < 3; i++) {
+      var el = all[i], id = i === 0 ? "scA" : (i === 1 ? "scB" : "scC");
+      if (id === role.base) { el.style.zIndex = "1"; el.style.opacity = "1"; clearMask(el); }
+      else if (id === role.top) { el.style.zIndex = "3"; el.style.opacity = "1"; }
+      else { el.style.zIndex = "0"; el.style.opacity = "0"; clearMask(el); }
+    }
+    /* 目标层：六种几何，同一个 pe */
+    applyMask(document.getElementById(role.top), MASKS[seg].fn(pe));
+
+    /* ---- 同一 pe 派生的柔光（出场景向入场景的底色靠拢，两端为 0） ---- */
+    if (lastSeg !== seg) { els.veil.style.background = BG[role.top]; lastSeg = seg; }
+    els.veil.style.zIndex = "2";
+    els.veil.style.opacity = (0.16 * Math.sin(Math.PI * pe)).toFixed(4);
+
+    /* ---- 仪表：文案 / 数字 / 条 全部从同一个 seg + pe 派生 ---- */
+    var state = t >= T_END ? "DONE" : (t < LEAD ? "READY" : "REVEALING");
+    for (var k = 0; k < NSEG; k++) {
+      var f = k < seg ? 1 : (k === seg ? pe : 0);
+      FILLS[k].style.width = (181 * f).toFixed(2) + "px";
+      FILLS[k].style.background = k === seg ? "#4fd1c5" : "#3f7f8c";
+      LABELS[k].style.color = k === seg ? "#eaf1f8" : (k < seg ? "#7f93a8" : "#55697f");
+    }
+    drawReadout(state, seg, pe);
+  };
+
+  /* ===================================================================================
+     #selftest —— 用 chromium --dump-dom 可复现的证据：
+     同一签名下六种实现在 p=0 / 1 的面积覆盖率（0% → 100%，单调）
+     =================================================================================== */
+  function coverage(spec, kind) {
+    var COLS = 64, ROWS = 36, hit = 0, x, y, r, cx, cy, i, pts, ctx, path;
+    if (spec.clip) {
+      ctx = coverage.ctx || (coverage.ctx = document.createElement("canvas").getContext("2d"));
+      var s = spec.clip, inner;
+      if (s.indexOf("circle(") === 0) {
+        var m = /circle\(([-\d.]+)px at ([-\d.]+)px ([-\d.]+)px\)/.exec(s);
+        r = +m[1]; cx = +m[2]; cy = +m[3];
+        for (y = 0; y < ROWS; y++) for (x = 0; x < COLS; x++) {
+          var px = (x + 0.5) * SW / COLS, py = (y + 0.5) * SH / ROWS;
+          if ((px - cx) * (px - cx) + (py - cy) * (py - cy) <= r * r) hit++;
+        }
+        return hit / (COLS * ROWS);
+      }
+      if (s.indexOf("polygon(") === 0) {
+        inner = s.slice(8, -1).split(",");
+        path = new Path2D();
+        for (i = 0; i < inner.length; i++) {
+          pts = inner[i].trim().split(/\s+/);
+          var vx = parseFloat(pts[0]), vy = parseFloat(pts[1]);
+          if (i === 0) path.moveTo(vx, vy); else path.lineTo(vx, vy);
+        }
+        path.closePath();
+      } else {
+        inner = s.slice(6, -2);                      // path("…")
+        path = new Path2D(inner);
+      }
+      for (y = 0; y < ROWS; y++) for (x = 0; x < COLS; x++) {
+        if (ctx.isPointInPath(path, (x + 0.5) * SW / COLS, (y + 0.5) * SH / ROWS)) hit++;
+      }
+      return hit / (COLS * ROWS);
+    }
+    /* mask-image 两类 */
+    if (kind === "dissolve") {
+      var j = Math.round(spec.p * (LV - 1)), thr = j / (LV - 1);
+      for (y = 0; y < NH; y++) for (x = 0; x < NW; x++) if (hash2(x, y) < thr) hit++;
+      return hit / (NW * NH);
+    }
+    var a = spec.p * 360;
+    for (y = 0; y < ROWS; y++) for (x = 0; x < COLS; x++) {
+      var qx = (x + 0.5) * SW / COLS - 640, qy = (y + 0.5) * SH / ROWS - 360;
+      var ang = (Math.atan2(qx, -qy) * 180 / Math.PI + 360) % 360;
+      if (ang <= a) hit++;
+    }
+    return hit / (COLS * ROWS);
+  }
+
+  if (location.hash === "#selftest") {
+    var lines = ["mask(kind, p) 覆盖率 —— 同一个签名下的六种实现（采样 64×36）"];
+    for (var mi = 0; mi < MASKS.length; mi++) {
+      var m = MASKS[mi], row = [];
+      var ps = [0, 0.25, 0.5, 0.75, 1];
+      for (var pi = 0; pi < ps.length; pi++) {
+        var sp = m.fn(ps[pi]);
+        sp.p = ps[pi];
+        row.push(ps[pi].toFixed(2) + "→" + (coverage(sp, m.id) * 100).toFixed(1) + "%");
+      }
+      var s1 = m.fn(1);
+      lines.push(m.id.padEnd(9) + " " + row.join("  ") +
+                 "   | p=1 值: " + (s1.clip ? s1.clip : s1.mask).replace(/\s+/g, " ").slice(0, 78));
+    }
+    var pre = document.createElement("pre");
+    pre.id = "selftest";
+    pre.style.cssText = "position:absolute;left:-99999px;top:0;margin:0";
+    pre.textContent = lines.join("\n");
+    document.body.appendChild(pre);
+  }
+
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>

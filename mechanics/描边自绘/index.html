@@ -1,0 +1,356 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 15 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：B 类 —— 用到加色混合 / 发光，换浅底时把 screen 改 multiply、发光改投影，机制不变。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>描边自绘 / 路径生长 · 主方案（reelDraw 单一进度源）</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #04101c; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #071320;
+    color: #cfe6f7;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  .mono { font-family: "Noto Sans Mono CJK SC", ui-monospace, monospace; }
+
+  .grid {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background-image:
+      linear-gradient(to right, rgba(110,190,255,.055) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(110,190,255,.055) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .glow {
+    position: absolute; left: 220px; top: -150px; width: 1060px; height: 840px;
+    background: radial-gradient(closest-side,
+      rgba(58,158,232,.26), rgba(58,158,232,.07) 60%, rgba(7,19,32,0) 100%);
+  }
+  .frame {
+    position: absolute; left: 40px; top: 40px; right: 40px; bottom: 40px;
+    border: 1px solid rgba(120,200,255,.13);
+  }
+
+  .head { position: absolute; left: 72px; right: 72px; top: 62px;
+          display: flex; justify-content: space-between; align-items: flex-start; }
+  .kicker { font-size: 26px; letter-spacing: .06em; color: #dceffc; font-weight: 500; }
+  .kicker i { font-style: normal; color: #46708d; padding: 0 6px; }
+  .meter { width: 250px; padding-top: 2px; }
+  .mrow { display: flex; justify-content: space-between; align-items: baseline;
+          font-size: 17px; letter-spacing: .15em; }
+  .mrow .lab { color: #7fa6c2; }
+  .mrow .num { font-size: 22px; letter-spacing: .03em; color: #ffb454; }
+  .track { position: relative; margin-top: 10px; width: 250px; height: 3px;
+           background: rgba(110,190,255,.24); }
+  .fill { position: absolute; left: 0; top: 0; height: 3px; width: 0; background: #8ae6ff; }
+  .mtip { position: absolute; top: -2.5px; left: 0; width: 8px; height: 8px;
+          margin-left: -4px; border-radius: 50%; background: #dff4ff; }
+
+  #map { position: absolute; left: 72px; top: 126px; }
+
+  /* 底稿：预印的极淡网格 / 基线，t=0 就构成一张「制图纸」 */
+  .pgrid { fill: none; stroke: rgba(120,200,255,.11); stroke-width: 1; }
+  .sbar { fill: none; stroke: rgba(140,205,255,.30); stroke-width: 1.4; }
+
+  #c0, #c1, #c2 { fill: none; stroke: #2f6d9c; stroke-width: 1.8;
+                  stroke-linecap: round; stroke-linejoin: round; }
+  #c0 { fill: #2f6d9c; fill-opacity: 0; opacity: .95; }
+  #c1 { opacity: .78; }
+  #c2 { opacity: .62; }
+
+  #ax { fill: none; stroke: #4d8fb8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  #cv { fill: none; stroke: #ffb454; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  #r0 { fill: none; stroke: #ffb454; stroke-width: 2.6; stroke-linecap: round; }
+  #r1 { fill: none; stroke: #ffb454; stroke-width: 1.8; stroke-linecap: round; }
+  #ticks line { stroke: #ffb454; stroke-width: 2; stroke-linecap: round; }
+  #ticks circle { fill: #ffb454; }
+  .brk { fill: none; stroke: rgba(255,180,84,.42); stroke-width: 1.6; stroke-linecap: round; }
+
+  #rt { fill: none; stroke: #8ae6ff; stroke-width: 3.2;
+        stroke-linecap: round; stroke-linejoin: round; }
+  #ov { fill: none; stroke: #eafcff; stroke-width: 4.4; stroke-linecap: round;
+        stroke-linejoin: round; opacity: 0; }
+  .lit { filter: drop-shadow(0 0 6px rgba(138,230,255,.55)); }
+  .litw { filter: drop-shadow(0 0 8px rgba(200,238,255,.85)); }
+
+  .wpd { fill: #dff4ff; stroke: #0d2a3f; stroke-width: 1.6; }
+  .cring { fill: none; stroke: #eafcff; stroke-width: 2; }
+  #tipcore { fill: #eafcff; }
+  #tiphalo { fill: #8ae6ff; opacity: .30; }
+  #stipcore { fill: #eafcff; }
+  #stiphalo { fill: #dff4ff; opacity: .34; }
+
+  .pv { fill: #8fb6d0; font-family: system-ui, "Noto Sans CJK SC", sans-serif;
+        font-size: 18px; letter-spacing: .06em; }
+  .pl { fill: #9dc2da; font-family: system-ui, "Noto Sans CJK SC", sans-serif;
+        font-size: 18px; letter-spacing: .08em; }
+  .pn { fill: #ffb454; font-family: "Noto Sans Mono CJK SC", monospace; font-size: 18px; }
+
+  .foot { position: absolute; left: 72px; right: 72px; top: 616px;
+          display: flex; justify-content: space-between; align-items: center;
+          font-size: 18px; letter-spacing: .07em; color: #7fa6c2; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="grid"></div>
+  <div class="glow" id="glow"></div>
+  <div class="frame"></div>
+
+  <div class="head">
+    <div class="kicker">特效 03 <i>/</i> 描边自绘 · 路径生长</div>
+    <div class="meter">
+      <div class="mrow"><span class="lab" id="phase">READY</span><span class="num mono" id="pct">000%</span></div>
+      <div class="track"><div class="fill" id="fill"></div><div class="mtip" id="mtip"></div></div>
+    </div>
+  </div>
+
+  <svg id="map" width="1136" height="452" viewBox="0 0 1136 452" aria-label="等高线、拟合曲线与航线线稿">
+    <g id="world">
+
+      <!-- 0. 底稿（静态壳）：比例尺 + 起终点标记，t=0 即完整构图 -->
+      <path class="sbar" d="M96,424 L256,424 M96,416 L96,432 M176,419 L176,429 M256,416 L256,432" />
+      <text class="pn" x="96" y="446">20 km</text>
+      <path class="brk" d="M884,146 L872,146 L872,158 M916,146 L928,146 L928,158 M884,178 L872,178 L872,166 M916,178 L928,178 L928,166" />
+      <circle cx="96" cy="372" r="4.5" fill="none" stroke="rgba(140,205,255,.42)" stroke-width="1.6" />
+      <text class="pl" x="96" y="352">起点</text>
+      <text class="pl" x="952" y="169">目标</text>
+
+      <!-- 1. 等高线：同一个 blob 三层缩放。缩放走 transform，
+               dasharray 用「局部长度」，所以缩放不会破坏生长速度。 -->
+      <g id="terrain">
+        <path id="c0" d="M 6,-206 C 74,-210 130,-188 166,-152 C 198,-120 206,-78 218,-44 C 230,-10 216,26 198,58 C 180,90 178,114 148,136 C 118,158 74,160 38,174 C 4,187 -36,192 -74,174 C -114,155 -138,126 -158,92 C -178,58 -198,26 -200,-12 C -202,-50 -182,-86 -160,-118 C -134,-156 -86,-188 -36,-200 C -20,-203 -6,-206 6,-206 Z"
+              transform="translate(378,212) scale(1)" />
+        <path id="c1" d="M 6,-206 C 74,-210 130,-188 166,-152 C 198,-120 206,-78 218,-44 C 230,-10 216,26 198,58 C 180,90 178,114 148,136 C 118,158 74,160 38,174 C 4,187 -36,192 -74,174 C -114,155 -138,126 -158,92 C -178,58 -198,26 -200,-12 C -202,-50 -182,-86 -160,-118 C -134,-156 -86,-188 -36,-200 C -20,-203 -6,-206 6,-206 Z"
+              transform="translate(385,217) scale(0.73)" />
+        <path id="c2" d="M 6,-206 C 74,-210 130,-188 166,-152 C 198,-120 206,-78 218,-44 C 230,-10 216,26 198,58 C 180,90 178,114 148,136 C 118,158 74,160 38,174 C 4,187 -36,192 -74,174 C -114,155 -138,126 -158,92 C -178,58 -198,26 -200,-12 C -202,-50 -182,-86 -160,-118 C -134,-156 -86,-188 -36,-200 C -20,-203 -6,-206 6,-206 Z"
+              transform="translate(373,209) scale(0.47)" />
+      </g>
+
+      <!-- 2. 拟合曲线面板：坐标格是底稿，轴与曲线才是被画出来的路径 -->
+      <g id="panel">
+        <rect x="800" y="296" width="322" height="152" rx="4"
+              fill="rgba(10,32,51,.72)" stroke="rgba(120,200,255,.20)" />
+        <!-- 预印坐标格：底稿，不进时间轴；轴与曲线才是被画出来的路径 -->
+        <path class="pgrid" d="M818,336 L1104,336 M818,358 L1104,358 M818,380 L1104,380 M818,402 L1104,402 M818,424 L1104,424 M818,336 L818,424 M866,336 L866,424 M913,336 L913,424 M961,336 L961,424 M1009,336 L1009,424 M1056,336 L1056,424 M1104,336 L1104,424" />
+        <text class="pv" x="818" y="322">拟合曲线 · 7 个采样点</text>
+        <path id="ax" d="M818,336 L818,424 L1104,424" />
+        <path id="cv" d="M818,412 L866,392 L913,400 L961,366 L1009,374 L1056,344 L1104,332" />
+      </g>
+
+      <!-- 3. 目标：双环 + 十字刻线（刻线在双环画完后浮现） -->
+      <path id="r0" d="M868,162 A32,32 0 0 0 932,162 A32,32 0 0 0 868,162" />
+      <path id="r1" d="M885,162 A15,15 0 0 0 915,162 A15,15 0 0 0 885,162" />
+      <g id="ticks" opacity="0">
+        <line x1="900" y1="126" x2="900" y2="114" />
+        <line x1="900" y1="198" x2="900" y2="210" />
+        <line x1="864" y1="162" x2="852" y2="162" />
+        <line x1="936" y1="162" x2="948" y2="162" />
+        <circle cx="900" cy="162" r="3.6" />
+      </g>
+
+      <!-- 4. 航线：主路径，最后一条被画出来的路径 -->
+      <g class="lit">
+        <path id="rt" d="M 96,372 C 190,360 236,300 300,298 C 372,296 388,352 452,344 C 520,336 528,248 596,242 C 664,236 690,298 748,280 C 806,262 828,194 900,162" />
+        <path id="ov" />
+      </g>
+
+      <!-- 5. 航点：位置由 getPointAtLength 在 load 时算一次并缓存 -->
+      <g id="wps"></g>
+
+      <!-- 6. 生长光点 + 复核光点 -->
+      <g id="tipg" opacity="0">
+        <circle id="tiphalo" cx="0" cy="0" r="11" />
+        <circle id="tipcore" cx="0" cy="0" r="4.4" />
+      </g>
+      <g id="stipg" opacity="0">
+        <circle id="stiphalo" cx="0" cy="0" r="14" />
+        <circle id="stipcore" cx="0" cy="0" r="5" />
+      </g>
+
+    </g>
+  </svg>
+
+  <div class="foot">
+    <div>线稿自绘 · 8 条路径 · 错峰 30%</div>
+    <div>进度只有一条时间线 · 逐帧可复现</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ============ 时间常量：只有这一组，后面全部相对它算 ============ */
+  var T0 = 0.40, T1 = 3.40;   // 全局绘制区间（起手 → 主体）
+  var SPAN = 0.70;            // 错峰总跨度，占 prog 的比例
+  var DUR = 0.30;             // 每条路径占 prog 的比例 → 重叠 70%
+  var SW0 = 3.40, SW1 = 4.60; // 收束：沿航线逐点复核
+
+  var IDS = ["c0", "c1", "c2", "ax", "cv", "r0", "r1", "rt"];
+  var K = IDS.length;
+  var IT = [];
+  var FALLBACK = [];
+
+  var FR = [0.12, 0.29, 0.46, 0.63, 0.80];   // 航点在航线上的归一化位置
+  var WX = [], WY = [], WG = [], CR = [];
+
+  var $ = function (id) { return document.getElementById(id); };
+  var world = $("world"), route = $("rt"), ov = $("ov");
+  var tipg = $("tipg"), stipg = $("stipg");
+  var glowEl = $("glow"), ticksEl = $("ticks");
+  var phaseEl = $("phase"), pctEl = $("pct"), fillEl = $("fill"), mtipEl = $("mtip");
+  var wpsG = $("wps");
+
+  function windowOf(k) { return [k / K * SPAN, k / K * SPAN + DUR]; }
+  var SVGNS = "http://www.w3.org/2000/svg";
+
+  /* ============ 量长度：必须在 load 之后（本机实测结论见 README「踩坑」） ============ */
+  function measure(el) {
+    var L = 0;
+    try { L = el.getTotalLength(); } catch (e) { L = 0; }
+    if (!(L > 0.5)) {
+      var b = el.getBBox();
+      L = Math.sqrt((b.width + 1) * (b.height + 1)) * 3.1;
+      FALLBACK.push(el.id);
+    }
+    return L;
+  }
+
+  function lengthOf(id) {
+    var el = $(id);
+    var len = measure(el);
+    el.setAttribute("stroke-dasharray", len.toFixed(3) + " " + len.toFixed(3));
+    el.style.strokeDashoffset = len.toFixed(3);
+    return { el: el, len: len, u: 0 };
+  }
+
+  function build() {
+    var i;
+    for (i = 0; i < K; i++) IT.push(lengthOf(IDS[i]));
+
+    // 复核叠层直接抄航线的 d，不手写第二遍几何
+    ov.setAttribute("d", route.getAttribute("d"));
+    ov.setAttribute("stroke-dasharray", "76 6000");
+
+    // 航点位置：getPointAtLength 只在 load 时算一次，之后每帧只写 transform
+    var rl = IT[K - 1].len;
+    for (i = 0; i < FR.length; i++) {
+      var p = route.getPointAtLength(rl * FR[i]);
+      WX.push(p.x); WY.push(p.y);
+
+      var g = document.createElementNS(SVGNS, "g");
+      var dot = document.createElementNS(SVGNS, "circle");
+      dot.setAttribute("class", "wpd");
+      dot.setAttribute("r", "5");
+      var ring = document.createElementNS(SVGNS, "circle");
+      ring.setAttribute("class", "cring");
+      ring.setAttribute("r", "5");
+      ring.setAttribute("opacity", "0");
+      g.appendChild(dot);
+      g.appendChild(ring);
+      g.setAttribute("opacity", "0");
+      wpsG.appendChild(g);
+      WG.push(g); CR.push(ring);
+    }
+    window.__reelPathFallback = FALLBACK;
+    window.__reelPathLengths = IT.map(function (x) { return +x.len.toFixed(2); });
+  }
+
+  /* ============ 唯一的动画函数：所有派生量都从同一次插值里出来 ============ */
+  window.reelDraw = function (t) {
+    var i, k, it, u, q;
+
+    /* --- 真值 1：全局绘制进度 --- */
+    var prog = reel.span(t, T0, T1);
+
+    /* --- 8 条路径的局部进度：u_k = span(prog, k/K*SPAN, k/K*SPAN + DUR) --- */
+    for (k = 0; k < K; k++) {
+      it = IT[k];
+      var w = windowOf(k);
+      u = reel.span(prog, w[0], w[1]);
+      it.u = u;
+      it.el.style.strokeDashoffset = (it.len * (1 - u)).toFixed(3);  // 每元素每帧只写一次
+    }
+    // 陆地：外圈画到哪，填充就透到哪（同一个 u_0，不是第二条时间线）
+    IT[0].el.style.fillOpacity = (IT[0].u * 0.10).toFixed(4);
+
+    /* --- 生长光点：位置与航线进度共用同一个 u_R --- */
+    var uR = IT[K - 1].u;
+    var rl = IT[K - 1].len;
+    q = route.getPointAtLength(rl * uR);
+    tipg.setAttribute("transform", "translate(" + q.x.toFixed(2) + "," + q.y.toFixed(2) + ")");
+    tipg.style.opacity = (uR > 0.0005 && uR < 0.9995) ? "1" : "0";
+
+    /* --- 航点：窗口同样写在 prog 空间，和 u_k 是同一个式子 --- */
+    var aR = (K - 1) / K * SPAN;
+    for (i = 0; i < FR.length; i++) {
+      var wp = reel.span(prog, aR + FR[i] * DUR, aR + FR[i] * DUR + 0.06);
+      WG[i].setAttribute("transform",
+        "translate(" + WX[i].toFixed(2) + "," + WY[i].toFixed(2) + ") scale(" + reel.easeOut(wp).toFixed(3) + ")");
+      WG[i].setAttribute("opacity", wp.toFixed(3));
+    }
+
+    /* --- 目标刻线：双环画完后浮现 --- */
+    var a1 = windowOf(K - 2);
+    ticksEl.style.opacity = reel.span(prog, a1[1], a1[1] + 0.07).toFixed(3);
+
+    /* --- 真值 2：收束复核沿航线走的行程（0→1）。它承载信息：
+           走到的位置 = 已复核的航点数，逐点放一圈确认环。 --- */
+    var sv = reel.span(t, SW0, SW1);
+    var sfe = reel.easeInOut(sv);
+    ov.style.strokeDashoffset = (-rl * sfe).toFixed(3);
+    var ovOp = (sv <= 0 || sv >= 1) ? 0 : Math.min(1, Math.min(sv, 1 - sv) / 0.12);
+    ov.style.opacity = ovOp.toFixed(3);
+    q = route.getPointAtLength(rl * sfe);
+    stipg.setAttribute("transform", "translate(" + q.x.toFixed(2) + "," + q.y.toFixed(2) + ")");
+    stipg.style.opacity = ovOp.toFixed(3);
+
+    var checked = 0;
+    for (i = 0; i < FR.length; i++) {
+      var cf = reel.span(sfe, FR[i], FR[i] + 0.10);
+      if (sfe >= FR[i]) checked++;
+      CR[i].setAttribute("r", (5 + 24 * cf).toFixed(2));
+      CR[i].setAttribute("opacity", ((1 - cf) * 0.85).toFixed(3));
+    }
+
+    /* --- 呼吸一次：同一个 br 驱动辉光与整组缩放 --- */
+    var br = Math.sin(Math.PI * reel.span(t, SW0 + 0.05, SW1 - 0.05));
+    glowEl.style.opacity = (0.50 + 0.50 * br).toFixed(3);
+    world.setAttribute("transform",
+      "translate(568,226) scale(" + (1 + 0.006 * br).toFixed(5) + ") translate(-568,-226)");
+
+    /* --- 表头读数：数字 / 进度条 / 游标全部出自同一个 prog --- */
+    var pct = Math.round(prog * 100);
+    pctEl.textContent = ("00" + pct).slice(-3) + "%";
+    phaseEl.textContent = t < T0 ? "READY"
+      : (t < SW0 ? "STROKE"
+        : (t < SW1 ? "CHECK " + checked + "/" + FR.length : "DRAWN"));
+    var wpx = prog * 250;
+    fillEl.style.width = wpx.toFixed(2) + "px";
+    mtipEl.style.left = wpx.toFixed(2) + "px";
+  };
+
+  /* ============ 只做一次：量长度、建航点（不进时间轴） ============ */
+  function onLoad() {
+    if (IT.length) return;
+    build();
+  }
+  if (document.readyState === "complete") onLoad();
+  else window.addEventListener("load", onLoad);
+})();
+</script>
+</body>
+</html>

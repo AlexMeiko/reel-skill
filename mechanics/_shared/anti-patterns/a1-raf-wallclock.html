@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!-- 反例 A1：墙钟 rAF（rAF 时间戳）驱动主运动。
+     期望结果：非确定 —— 同一 t 两次截帧不同。
+     绿点 = 解析式正解（t 的纯函数）；红点 = 反例。 -->
+<script>window.REEL = { duration: 4, fps: 30, width: 1280, height: 720 };</script>
+<style>
+  html, body { margin: 0; }
+  .stage { position: relative; width: 1280px; height: 720px; overflow: hidden;
+           background: #0e1116; color: #e8eef4;
+           font-family: system-ui, "Noto Sans CJK SC", sans-serif; }
+  .track { position: absolute; left: 140px; top: 0; width: 1000px; height: 3px;
+           background: #2a3140; }
+  .dot { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; }
+  #ok   { background: #3ddc97; box-shadow: 0 0 18px #3ddc97; }
+  #bad  { background: #ff4d6d; box-shadow: 0 0 18px #ff4d6d; }
+  .lab { position: absolute; left: 140px; font-size: 20px; letter-spacing: .04em; }
+  .tag { position: absolute; left: 140px; font-size: 17px; opacity: .75; }
+  h1 { position: absolute; left: 140px; top: 40px; margin: 0; font-size: 34px; }
+  .sub { position: absolute; left: 140px; top: 92px; font-size: 18px; opacity: .7; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <h1>反例 A1 · 墙钟 rAF 驱动</h1>
+  <div class="sub">红点位置由 requestAnimationFrame 的时间戳决定 —— 与 t 无关</div>
+
+  <div class="track" style="top: 300px"></div>
+  <div class="dot" id="ok"  style="top: 300px"></div>
+  <div class="tag" style="top: 330px">正解：由 reelDraw(t) 解析求出</div>
+
+  <div class="track" style="top: 470px"></div>
+  <div class="dot" id="bad" style="top: 470px"></div>
+  <div class="tag" style="top: 500px">反例：由墙钟 rAF 累加求出</div>
+
+  <div class="lab" id="readout" style="top: 610px"></div>
+</div>
+<script>
+  var D = window.REEL.duration, X0 = 140, X1 = 1140;
+
+  function reelDraw(t) {
+    var u = reel.easeInOut(reel.span(t, 0.2, D - 0.2));
+    var x = X0 + (X1 - X0) * u;
+    document.getElementById("ok").style.left = x + "px";
+    window.__okX = x;
+    document.getElementById("readout").textContent =
+      "t=" + t.toFixed(3) + "s   正解 x=" + x.toFixed(1) + "px   反例 x=" + (window.__badX || 0).toFixed(1) + "px";
+  }
+
+  // ↓↓↓ 反例：墙钟 rAF。start 用第一帧时间戳，之后完全靠真实流逝时间推进。
+  var start = null;
+  function loop(ts) {
+    if (start === null) start = ts;
+    var elapsed = (ts - start) / 1000;          // 墙钟秒数，与 __reelTime 无关
+    var u = reel.easeInOut(reel.span(elapsed, 0.2, D - 0.2));
+    window.__badX = X0 + (X1 - X0) * u;
+    document.getElementById("bad").style.left = window.__badX + "px";
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+</script>
+</body>
+</html>

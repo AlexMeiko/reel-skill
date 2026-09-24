@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!-- 反例 A5：transition 当主时间轴。
+     reelDraw(t) 每帧把 left 写到「t 对应的目标值」，但 transition 会把它变成
+     一条 900ms 的墙钟补间 —— 于是画面永远滞后于 t，seek 到末帧也追不上。
+     期望结果：位置错误（红点落后绿点），且跨运行不稳定。 -->
+<script>window.REEL = { duration: 4, fps: 30, width: 1280, height: 720 };</script>
+<style>
+  html, body { margin: 0; }
+  .stage { position: relative; width: 1280px; height: 720px; overflow: hidden;
+           background: #0e1116; color: #e8eef4;
+           font-family: system-ui, "Noto Sans CJK SC", sans-serif; }
+  .track { position: absolute; left: 140px; width: 1000px; height: 3px; background: #2a3140; }
+  .dot { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; }
+  #ok  { background: #3ddc97; box-shadow: 0 0 18px #3ddc97; }
+  #bad { background: #ff4d6d; box-shadow: 0 0 18px #ff4d6d;
+         transition: left 900ms cubic-bezier(.22,.61,.36,1); }
+  .tag { position: absolute; left: 140px; font-size: 17px; opacity: .75; }
+  h1 { position: absolute; left: 140px; top: 40px; margin: 0; font-size: 34px; }
+  .sub { position: absolute; left: 140px; top: 92px; font-size: 18px; opacity: .7; }
+  #readout { position: absolute; left: 140px; top: 610px; font-size: 20px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <h1>反例 A5 · transition 当主时间轴</h1>
+  <div class="sub">红点被 900ms 的 transition 拖住 —— 它显示的是「上一次 seek」的位置</div>
+
+  <div class="track" style="top: 300px"></div>
+  <div class="dot" id="ok" style="top: 300px"></div>
+  <div class="tag" style="top: 330px">正解：直接写最终值，无补间</div>
+
+  <div class="track" style="top: 470px"></div>
+  <div class="dot" id="bad" style="top: 470px"></div>
+  <div class="tag" style="top: 500px">反例：写目标值 + transition 补间</div>
+
+  <div id="readout"></div>
+</div>
+<script>
+  var D = window.REEL.duration, X0 = 140, X1 = 1140;
+  function reelDraw(t) {
+    var u = reel.easeInOut(reel.span(t, 0.2, D - 0.2));
+    var x = X0 + (X1 - X0) * u;
+    document.getElementById("ok").style.left = x + "px";
+    document.getElementById("bad").style.left = x + "px";   // ← 被 transition 拦截
+    var bad = document.getElementById("bad").getBoundingClientRect().left;
+    document.getElementById("readout").textContent =
+      "t=" + t.toFixed(3) + "s   正解 x=" + x.toFixed(1) + "px   反例实际 x=" + bad.toFixed(1) + "px";
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,463 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 15 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>节点图连线 · 数据流 —— 主方案（边时刻 = max(两端节点完成时刻)）</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #e7e2d6; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #f2eee4;
+    color: #26262b;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  .mono { font-family: "Noto Sans Mono CJK SC", ui-monospace, monospace; }
+
+  /* 底稿：制图纸网格 + 四角裁切标记。t=0 就是一张能当封面的静图。 */
+  .paper {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background-image:
+      linear-gradient(to right, rgba(58,50,36,.055) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(58,50,36,.055) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .rule { position: absolute; left: 72px; right: 72px; top: 108px; height: 1px;
+          background: rgba(58,50,36,.16); }
+  .crop { position: absolute; width: 22px; height: 22px; }
+  .crop i { position: absolute; background: rgba(58,50,36,.28); }
+  .crop i.h { left: 0; top: 0; width: 22px; height: 1px; }
+  .crop i.v { left: 0; top: 0; width: 1px; height: 22px; }
+  #cr0 { left: 40px; top: 40px; }
+  #cr1 { right: 40px; top: 40px; }
+  #cr2 { left: 40px; bottom: 40px; }
+  #cr3 { right: 40px; bottom: 40px; }
+
+  .title {
+    position: absolute; left: 72px; top: 44px;
+    font-size: 30px; font-weight: 600; letter-spacing: .02em; color: #1e1e24;
+  }
+  .title b { font-weight: 600; color: #0d7a84; }
+  .sub {
+    position: absolute; left: 74px; top: 82px;
+    font-size: 16px; letter-spacing: .22em; color: #8c8577;
+  }
+  .legend {
+    position: absolute; right: 72px; top: 54px;
+    display: flex; align-items: center; gap: 22px;
+    font-size: 18px; color: #4a4741;
+  }
+  .lg { display: flex; align-items: center; gap: 8px; }
+  .lg .dot { width: 9px; height: 9px; border-radius: 50%; background: #f2681f; }
+  .lg .ln { width: 24px; height: 3px; border-radius: 2px; background: #a99f8b; }
+  .lg .lnk { width: 24px; height: 4px; border-radius: 2px; background: #0d7a84; }
+
+  #g { position: absolute; left: 0; top: 0; }
+
+  .ename { font-size: 21px; fill: #26262b; font-weight: 500; }
+  .eidx  { font-size: 12px; fill: #9b9384; font-family: "Noto Sans Mono CJK SC", monospace; }
+  .port  { fill: #fffdf8; stroke: #8a8375; stroke-width: 1.4; }
+  .ring  { }
+  .edge  { fill: none; stroke: #a99f8b; stroke-width: 2.4; stroke-linecap: round; }
+  .edge.k { stroke: #0d7a84; }
+  .comet { fill: none; stroke: #f2681f; stroke-linecap: butt; }
+  .csoft { fill: none; stroke: #f2681f; stroke-linecap: butt; }
+  .pk .halo { fill: #f2681f; opacity: .22; }
+  .pk .core { fill: #f2681f; stroke: #fffdf8; stroke-width: 1.6; }
+
+  .foot {
+    position: absolute; left: 72px; right: 72px; top: 630px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 18px; color: #6f695d; letter-spacing: .04em;
+  }
+  .foot .hi { color: #0d7a84; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="paper"></div>
+  <div class="rule"></div>
+  <div class="crop" id="cr0"><i class="h"></i><i class="v"></i></div>
+  <div class="crop" id="cr1"><i class="h"></i><i class="v"></i></div>
+  <div class="crop" id="cr2"><i class="h"></i><i class="v"></i></div>
+  <div class="crop" id="cr3"><i class="h"></i><i class="v"></i></div>
+
+  <div class="title">节点图连线 <b>·</b> 素材处理管线</div>
+  <div class="sub mono">NODE GRAPH / DATAFLOW</div>
+
+  <div class="legend">
+    <span class="lg"><span class="dot"></span>数据包</span>
+    <span class="lg"><span class="ln"></span>普通边</span>
+    <span class="lg"><span class="lnk"></span>关键路径</span>
+  </div>
+
+  <svg id="g" width="1280" height="720" viewBox="0 0 1280 720" aria-label="素材处理管线的节点图与连线生长">
+    <g id="edges"></g>
+    <g id="comets"></g>
+    <g id="packets"></g>
+    <g id="rings"></g>
+    <g id="nodes"></g>
+  </svg>
+
+  <div class="foot">
+    <div>7 节点 · 7 条边 · <span class="hi">关键路径 4 跳</span></div>
+    <div>边的生长时刻 = max(两端节点完成时刻)</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ===================================================================
+     时间常量：全片只有这一组。边的时刻不在这里 —— 它从节点推出来。
+     =================================================================== */
+  var N_APPEAR = 0.30;               // 单个节点浮现时长
+  var E_GROW   = 0.40;               // 单条边生长时长
+  var T_KEY    = 2.35;               // 关键路径高亮开始（字面量）
+  var KEY_FADE = 0.45;               // 高亮渐变时长
+  var T_WAVE   = 2.80;               // 关键路径连通脉冲开始
+  var WAVE_DUR = 1.10;               // 脉冲走完全程的时长
+  var COMET    = 66;                 // 脉冲亮段长度(px)
+  var NP       = 2;                  // 每条边上的数据包数量
+
+  var NODE_W = 128, NODE_H = 58, NODE_R = 10;
+  var SAMPLES = 64;                  // 每条边缓存的采样点数（load 时算一次）
+
+  /* ===================================================================
+     数据：节点只有「出现时刻 t0」；边只有拓扑（from/to）。
+     边没有任何自己的时刻 —— 见 buildPlan()。
+     =================================================================== */
+  var NODES = [
+    { id: "a", label: "素材", x: 144,  y: 350, t0: 0.45, key: true  },
+    { id: "b", label: "解码", x: 396,  y: 200, t0: 0.60, key: true  },
+    { id: "c", label: "分离", x: 396,  y: 500, t0: 0.75, key: false },
+    { id: "d", label: "增强", x: 648,  y: 200, t0: 0.90, key: true  },
+    { id: "e", label: "混音", x: 648,  y: 500, t0: 1.05, key: false },
+    { id: "f", label: "合成", x: 900,  y: 350, t0: 1.20, key: true  },
+    { id: "g", label: "编码", x: 1152, y: 350, t0: 1.35, key: true  }
+  ];
+  var EDGES = [
+    { from: "a", to: "b", key: true  },
+    { from: "a", to: "c", key: false },
+    { from: "b", to: "d", key: true  },
+    { from: "c", to: "e", key: false },
+    { from: "d", to: "f", key: true  },
+    { from: "e", to: "f", key: false },
+    { from: "f", to: "g", key: true  }
+  ];
+
+  /* ===================================================================
+     唯一的时刻推导：边的起点 = 两端节点「都完成浮现」的那一帧之后。
+         t_edge_start = max(node[from].t0 + APPEAR, node[to].t0 + APPEAR)
+     边没有任何字面量时刻。把某个节点的 t0 改晚，凡是连着它的边全部自动跟着变晚。
+     =================================================================== */
+  function buildPlan(nodes, edges, appear, grow) {
+    var done = {}, i;
+    for (i = 0; i < nodes.length; i++) done[nodes[i].id] = nodes[i].t0 + appear;
+    var out = [];
+    for (i = 0; i < edges.length; i++) {
+      var e = edges[i];
+      var t0 = Math.max(done[e.from], done[e.to]);
+      out.push({ key: !!e.key, t0: t0, t1: t0 + grow });
+    }
+    return out;
+  }
+
+  /* 确定性伪随机：只用来给每条边一点周期差异，不参与主时间轴 */
+  function hash(i) { var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123; return x - Math.floor(x); }
+
+  function easeOutBack(u, s) {
+    u = reel.clamp(u, 0, 1); s = s == null ? 1.70158 : s;
+    var p = u - 1;
+    return 1 + (s + 1) * p * p * p + s * p * p;
+  }
+
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function mk(tag, cls) {
+    var el = document.createElementNS(SVGNS, tag);
+    if (cls) el.setAttribute("class", cls);
+    return el;
+  }
+
+  var PLAN = [], KEYEDGES = [], KEYNODES = [], KEL = 0;
+  var T_KEY_AT = T_KEY, T_WAVE_AT = T_WAVE;
+  var built = false;
+  var gEdges, gComets, gPackets, gRings, gNodes;
+
+  /* 贝塞尔：水平出入的三次曲线 */
+  function edgeD(x1, y1, x2, y2) {
+    var dx = Math.min(120, Math.max(44, (x2 - x1) * 0.45));
+    return "M" + x1 + "," + y1 +
+           " C" + (x1 + dx) + "," + y1 + " " + (x2 - dx) + "," + y2 + " " + x2 + "," + y2;
+  }
+
+  /* 采样表：getPointAtLength 只在 load 时调用 SAMPLES+1 次并缓存；
+     之后每帧只用表内线性插值 —— 每帧 N 次 DOM 量测会拖慢 30fps 导出。 */
+  function sampleTable(path, len) {
+    var pts = [], i;
+    for (i = 0; i <= SAMPLES; i++) {
+      var p = path.getPointAtLength(len * i / SAMPLES);
+      pts.push(p.x, p.y);
+    }
+    return pts;
+  }
+  function pointAt(E, s) {
+    var n = SAMPLES;
+    var u = reel.clamp(s / E.len, 0, 1) * n;
+    var i = Math.min(n - 1, Math.floor(u)), f = u - i;
+    var x = E.pts[i * 2] + (E.pts[i * 2 + 2] - E.pts[i * 2]) * f;
+    var y = E.pts[i * 2 + 1] + (E.pts[i * 2 + 3] - E.pts[i * 2 + 1]) * f;
+    return { x: x, y: y };
+  }
+
+  function build() {
+    gEdges = document.getElementById("edges");
+    gComets = document.getElementById("comets");
+    gPackets = document.getElementById("packets");
+    gRings = document.getElementById("rings");
+    gNodes = document.getElementById("nodes");
+
+    var byId = {}, i, j;
+    for (i = 0; i < NODES.length; i++) byId[NODES[i].id] = NODES[i];
+
+    /* ---- 边：d 与长度都是拓扑的函数，不是时间的函数 ---- */
+    PLAN = buildPlan(NODES, EDGES, N_APPEAR, E_GROW);
+    for (i = 0; i < EDGES.length; i++) {
+      var e = EDGES[i], a = byId[e.from], b = byId[e.to];
+      var x1 = a.x + NODE_W / 2, y1 = a.y, x2 = b.x - NODE_W / 2, y2 = b.y;
+      var path = mk("path", "edge" + (e.key ? " k" : ""));
+      path.setAttribute("d", edgeD(x1, y1, x2, y2));
+      gEdges.appendChild(path);
+      var len = path.getTotalLength();
+      path.setAttribute("stroke-dasharray", len.toFixed(2) + " " + len.toFixed(2));
+      path.style.strokeDashoffset = len.toFixed(2);
+      path.style.opacity = "0";
+      var E = {
+        el: path, len: len, pts: sampleTable(path, len),
+        t0: PLAN[i].t0, t1: PLAN[i].t1, key: !!e.key,
+        from: e.from, to: e.to,
+        per: 1.05 + 0.35 * hash(i * 7.7 + 13.3),
+        cum: 0, pk: []
+      };
+      PLAN[i].E = E;
+      /* 数据包：1 个光晕 + 1 个亮核，位置每帧由取模相位算出 */
+      for (j = 0; j < NP; j++) {
+        var g = mk("g", "pk");
+        var halo = mk("circle", "halo");
+        var core = mk("circle", "core");
+        halo.setAttribute("r", e.key ? 11 : 8.5);
+        core.setAttribute("r", e.key ? 3.6 : 2.8);
+        g.appendChild(halo); g.appendChild(core);
+        g.setAttribute("opacity", "0");
+        gPackets.appendChild(g);
+        E.pk.push(g);
+      }
+      /* 关键路径连通脉冲：亮段与柔光段各一条，d 直接抄边的 d */
+      if (e.key) {
+        var soft = mk("path", "csoft");
+        soft.setAttribute("d", path.getAttribute("d"));
+        soft.setAttribute("stroke-width", "10");
+        soft.setAttribute("opacity", "0");
+        gComets.appendChild(soft);
+        var bright = mk("path", "comet");
+        bright.setAttribute("d", path.getAttribute("d"));
+        bright.setAttribute("stroke-width", "3.4");
+        bright.setAttribute("opacity", "0");
+        gComets.appendChild(bright);
+        E.csoft = soft; E.comet = bright;
+        KEYEDGES.push(E);
+      }
+    }
+
+    /* ---- 高亮起点：字面量 T_KEY 是设计值，但整体不得早于「最后一条边长完」。
+           节点时刻一改，这里跟着改 —— 全片没有第二个开始时刻。 ---- */
+    var lastT1 = 0;
+    for (i = 0; i < PLAN.length; i++) if (PLAN[i].E.t1 > lastT1) lastT1 = PLAN[i].E.t1;
+    T_KEY_AT = Math.max(T_KEY, lastT1 + 0.22);
+    T_WAVE_AT = T_KEY_AT + KEY_FADE;
+
+    /* ---- 关键路径的累计长度：脉冲的位置与节点环的时刻共用这一份 ---- */
+    for (i = 0; i < KEYEDGES.length; i++) {
+      KEYEDGES[i].cum = KEL;
+      KEL += KEYEDGES[i].len;
+    }
+
+    /* ---- 节点 ---- */
+    for (i = 0; i < NODES.length; i++) {
+      var n = NODES[i];
+      var g2 = mk("g", "node");
+      var rect = mk("rect", "box");
+      rect.setAttribute("x", -NODE_W / 2);
+      rect.setAttribute("y", -NODE_H / 2);
+      rect.setAttribute("width", NODE_W);
+      rect.setAttribute("height", NODE_H);
+      rect.setAttribute("rx", NODE_R);
+      rect.setAttribute("fill", "#fffdf8");
+      rect.setAttribute("stroke", n.key ? "#0d7a84" : "#d8d0be");
+      rect.setAttribute("stroke-width", n.key ? "1.8" : "1.4");
+      var bar = mk("rect", "bar");
+      bar.setAttribute("x", -NODE_W / 2 + 1);
+      bar.setAttribute("y", -NODE_H / 2 + 1);
+      bar.setAttribute("width", 5);
+      bar.setAttribute("height", NODE_H - 2);
+      bar.setAttribute("fill", n.key ? "#0d7a84" : "#cfc6b2");
+      var p1 = mk("circle", "port");
+      p1.setAttribute("cx", -NODE_W / 2); p1.setAttribute("cy", 0); p1.setAttribute("r", 3.2);
+      var p2 = mk("circle", "port");
+      p2.setAttribute("cx", NODE_W / 2); p2.setAttribute("cy", 0); p2.setAttribute("r", 3.2);
+      var t1 = mk("text", "ename");
+      t1.setAttribute("x", 6); t1.setAttribute("y", 7); t1.setAttribute("text-anchor", "middle");
+      t1.textContent = n.label;
+      var t2 = mk("text", "eidx");
+      t2.setAttribute("x", NODE_W / 2 - 12); t2.setAttribute("y", -12);
+      t2.setAttribute("text-anchor", "end");
+      t2.textContent = ("0" + (i + 1)).slice(-2);
+      g2.appendChild(rect); g2.appendChild(bar); g2.appendChild(p1);
+      g2.appendChild(p2); g2.appendChild(t1); g2.appendChild(t2);
+      g2.setAttribute("opacity", "0");
+      gNodes.appendChild(g2);
+      n.el = g2;
+      /* 环：脉冲经过该关键节点时向外扩一圈（同一个 cum 映射） */
+      if (n.key) {
+        var ring = mk("rect", "ring");
+        ring.setAttribute("fill", "none");
+        ring.setAttribute("stroke", "#f2681f");
+        ring.setAttribute("stroke-width", "2");
+        ring.setAttribute("rx", NODE_R + 4);
+        ring.setAttribute("opacity", "0");
+        gRings.appendChild(ring);
+        n.ring = ring;
+        n.cum = 0;
+        KEYNODES.push(n);
+      }
+    }
+    /* 关键节点的累计长度：沿关键边链推 —— 起点节点为 0，其余 = 前一条关键边的末端。
+       节点环的时刻与脉冲位置用同一个线性映射，不是第二条时间线。 */
+    var head = byId[KEYEDGES[0].from];
+    head.cum = 0;
+    head.tArrive = T_WAVE_AT;
+    for (i = 0; i < KEYEDGES.length; i++) {
+      var E3 = KEYEDGES[i];
+      var nb = byId[E3.to];
+      nb.cum = E3.cum + E3.len;
+      nb.tArrive = T_WAVE_AT + (nb.cum / KEL) * WAVE_DUR;
+    }
+
+    window.__edgePlan = {
+      appear: N_APPEAR, grow: E_GROW, keyTotal: KEL,
+      edges: PLAN.map(function (E4) { return { t0: +E4.t0.toFixed(4), t1: +E4.t1.toFixed(4), key: E4.key }; }),
+      nodes: NODES.map(function (n2) { return { id: n2.id, t0: n2.t0, done: +(n2.t0 + N_APPEAR).toFixed(4) }; })
+    };
+    built = true;
+  }
+
+  /* ===================================================================
+     唯一的动画函数：画面 = f(t)。没有累加器，没有上一帧状态。
+     =================================================================== */
+  window.reelDraw = function (t) {
+    if (!built) return;
+    var i, j, k;
+
+    /* 真值 1：关键路径高亮进度。节点、边、数据包全部从它派生 */
+    var kf = reel.easeInOut(reel.span(t, T_KEY_AT, T_KEY_AT + KEY_FADE));
+
+    /* ---- 节点：出现时刻只来自 NODES[i].t0 ---- */
+    for (i = 0; i < NODES.length; i++) {
+      var n = NODES[i];
+      var u = reel.span(t, n.t0, n.t0 + N_APPEAR);
+      var eo = reel.easeOut(u);
+      var sc = 0.88 + 0.12 * easeOutBack(u, 1.1);
+      var op = Math.min(1, u * 3.2);
+      if (!n.key) op *= (1 - 0.68 * kf);
+      n.el.setAttribute("transform",
+        "translate(" + n.x + "," + (n.y + (1 - eo) * 12).toFixed(2) + ") scale(" + sc.toFixed(4) + ")");
+      n.el.setAttribute("opacity", op.toFixed(4));
+    }
+
+    /* ---- 边：u 的下界就是 max(两端节点完成时刻)，这里不给边任何自己的时刻 ---- */
+    for (i = 0; i < EDGES.length; i++) {
+      var E = PLAN[i].E;
+      var eu = reel.span(t, E.t0, E.t1);
+      var eop = eu > 0 ? 1 : 0;
+      if (!E.key) eop *= (1 - 0.72 * kf);
+      E.el.style.opacity = eop.toFixed(4);
+      E.el.style.strokeDashoffset = (E.len * (1 - eu)).toFixed(3);
+      E.el.setAttribute("stroke-width", (2.4 + (E.key ? 1.4 * kf : 0)).toFixed(2));
+    }
+
+    /* ---- 数据包：取模相位 s = (s0 + v*t) % L，绝不累加 ---- */
+    for (i = 0; i < EDGES.length; i++) {
+      var P = PLAN[i].E;
+      var age = t - P.t1;                       // 只有边长完（t1）之后才可能出现数据包
+      for (k = 0; k < NP; k++) {
+        var g = P.pk[k];
+        var a = age - k * (P.per / NP);          // 第 k 个包的出生相对 t1 再错峰
+        if (a < 0) { g.setAttribute("opacity", "0"); continue; }
+        var p = (a / P.per) % 1;                 // ← 取模：与 t 一一对应，seek 到哪都对
+        var pt = pointAt(P, P.len * p);
+        g.setAttribute("transform",
+          "translate(" + pt.x.toFixed(2) + "," + pt.y.toFixed(2) + ")");
+        var pop = Math.min(1, a / 0.10);
+        if (!P.key) pop *= (1 - 0.70 * kf);
+        g.setAttribute("opacity", pop.toFixed(3));
+      }
+    }
+
+    /* ---- 关键路径连通脉冲：一个线性映射同时决定亮段位置与节点环时刻 ---- */
+    var wv = reel.span(t, T_WAVE_AT, T_WAVE_AT + WAVE_DUR);
+    var s = wv * KEL;
+    for (i = 0; i < KEYEDGES.length; i++) {
+      var KE = KEYEDGES[i];
+      var local = s - KE.cum;
+      var a0 = Math.max(0, local - COMET);
+      var a1 = Math.min(KE.len, local);
+      var D = a1 - a0;
+      if (D < 0.8) {
+        KE.comet.setAttribute("opacity", "0");
+        KE.csoft.setAttribute("opacity", "0");
+        continue;
+      }
+      var arr = D.toFixed(2) + " " + (KE.len + 2).toFixed(2);
+      var off = (-a0).toFixed(2);
+      KE.comet.setAttribute("stroke-dasharray", arr);
+      KE.comet.setAttribute("stroke-dashoffset", off);
+      KE.comet.setAttribute("opacity", "1");
+      KE.csoft.setAttribute("stroke-dasharray", arr);
+      KE.csoft.setAttribute("stroke-dashoffset", off);
+      KE.csoft.setAttribute("opacity", "0.16");
+    }
+    for (i = 0; i < KEYNODES.length; i++) {
+      var KN = KEYNODES[i];
+      var ru = reel.span(t, KN.tArrive, KN.tArrive + 0.55);
+      var d = 5 + 24 * reel.easeOut(ru);
+      var rop = (t < KN.tArrive || ru >= 1) ? 0 : (1 - ru) * 0.85;
+      KN.ring.setAttribute("x", (KN.x - NODE_W / 2 - d).toFixed(2));
+      KN.ring.setAttribute("y", (KN.y - NODE_H / 2 - d).toFixed(2));
+      KN.ring.setAttribute("width", (NODE_W + 2 * d).toFixed(2));
+      KN.ring.setAttribute("height", (NODE_H + 2 * d).toFixed(2));
+      KN.ring.setAttribute("opacity", rop.toFixed(3));
+    }
+  };
+
+  function onLoad() {
+    if (built) return;
+    try { build(); } catch (err) { window.__reelBuildError = String(err && err.message || err); }
+  }
+  if (document.readyState === "complete") onLoad();
+  else window.addEventListener("load", onLoad);
+})();
+</script>
+</body>
+</html>

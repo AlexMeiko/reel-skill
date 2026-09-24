@@ -1,0 +1,168 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 8 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>文字乱码解码 · 主方案（时间量子 + 三级字符池）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #cfc7b8; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #f0e9dc;
+    color: #1d1a15;
+    font-family: "Noto Sans Mono CJK SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  }
+  .grid {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background-image:
+      linear-gradient(to right, rgba(29,26,21,.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(29,26,21,.05) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .frame {
+    position: absolute; left: 34px; top: 34px; width: 1212px; height: 652px;
+    border: 1px solid rgba(29,26,21,.30); box-sizing: border-box;
+  }
+  .frame::after {
+    content: ""; position: absolute; left: 5px; top: 5px; right: 5px; bottom: 5px;
+    border: 1px solid rgba(29,26,21,.12);
+  }
+  .head {
+    position: absolute; left: 72px; top: 60px; width: 1136px;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .kicker { font-size: 17px; letter-spacing: .14em; color: #1d1a15; }
+  .kicker i { font-style: normal; color: #8a7c65; }
+  .status { font-size: 15px; letter-spacing: .16em; font-weight: 600; color: #c0392b; }
+  .titlewrap {
+    position: absolute; left: 72px; top: 292px; width: 1136px;
+    text-align: center;
+  }
+  .title { display: inline-block; font-size: 54px; line-height: 1.24; white-space: nowrap; }
+  .ch { display: inline-block; width: 1em; text-align: center; }
+  .rulewrap { position: absolute; top: 418px; height: 4px; left: 208px; width: 864px; }
+  .track { position: absolute; left: 0; top: 0; width: 100%; height: 4px; background: rgba(29,26,21,.13); }
+  .fill { position: absolute; left: 0; top: 0; width: 0; height: 4px; background: #c0392b; }
+  .foot {
+    position: absolute; left: 72px; top: 624px;
+    font-size: 14px; letter-spacing: .12em; color: #6f6350;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="grid"></div>
+  <div class="frame"></div>
+  <div class="head">
+    <div class="kicker">特效 02 <i>/</i> 文字乱码解码</div>
+    <div class="status" id="status">DECODING 000%</div>
+  </div>
+  <div class="titlewrap"><div class="title" id="title"></div></div>
+  <div class="rulewrap" id="rule"><div class="track"></div><div class="fill" id="fill"></div></div>
+  <div class="foot">12 Hz 时间量子 · 逐字锁定 · 逐帧可复现</div>
+</div>
+<script>
+(function () {
+  /* ---- 内容与时间轴（全部是 t 的纯函数，没有任何墙钟 / 随机数） ---- */
+  var TITLE = "确定性乱码：同一时刻永远是同一帧";
+  var N = TITLE.length;
+  var T0 = 0.45;                     // 第一个字符锁定
+  var T1 = 3.60;                     // 最后一个字符锁定（解码前沿到达行尾）
+  var STEP = (T1 - T0) / (N - 1);    // 逐字步进
+  var SETTLE = 0.55;                 // 落位弹跳时长
+  var QHZ = 12;                      // 乱码节拍：12 次/秒
+
+  /* 三级字符池：全角块 → ASCII 信号 → 汉字假字 → 真字 */
+  var POOLS = [
+    "\u259A\u259E\u2588\u2593\u2592\u2591\u2596\u2597\u2598\u259D",
+    "<>/\\|#$%&@*+=~^?!",
+    "\u7684\u4E00\u662F\u4E0D\u4E86\u5728\u4EBA\u6709\u6211\u4ED6\u8FD9\u4E3A\u4E4B\u5927\u6765\u4EE5\u4E2A\u4E2D\u4E0A\u4EEC\u5230\u8BF4\u56FD"
+  ];
+  var SCRAMBLE = ["#9c8e75", "#8b7d66", "#6f6350"];
+  var TH = [1.0, 0.3];               // rem 落到哪一级
+  var INK = [29, 26, 21];
+  var HOT = [192, 57, 43];
+
+  function hash(i) {                 // 确定性伪随机，i 为整数
+    var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123;
+    return x - Math.floor(x);
+  }
+  function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
+
+  var titleEl = document.getElementById("title");
+  var fillEl = document.getElementById("fill");
+  var ruleEl = document.getElementById("rule");
+  var statusEl = document.getElementById("status");
+  var slots = [];
+  var geo = { w: 864, slot: 54 };
+
+  (function build() {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < N; i++) {
+      var s = document.createElement("span");
+      s.className = "ch";
+      frag.appendChild(s);
+      slots.push(s);
+    }
+    titleEl.appendChild(frag);
+    /* 量一次标题实际宽度，让下划线与字符格严格对齐（只量一次，不参与时间轴） */
+    var box = titleEl.getBoundingClientRect();
+    geo.w = box.width;
+    geo.slot = box.width / N;
+    ruleEl.style.left = Math.round(box.left) + "px";
+    ruleEl.style.width = Math.round(box.width) + "px";
+  })();
+
+  /* 单个字符：未锁定 → 时间量子决定的乱码；已锁定 → 真字 + 落位弹跳 */
+  function drawChar(i, t) {
+    var el = slots[i];
+    var lock = T0 + i * STEP;
+    if (t < lock) {
+      var q = Math.floor(t * QHZ);
+      var rem = lock - t;
+      var lvl = rem > TH[0] ? 0 : (rem > TH[1] ? 1 : 2);
+      var pool = POOLS[lvl];
+      var idx = Math.floor(hash(i * 91.7 + q * 3.1 + lvl * 13.7) * pool.length);
+      el.textContent = pool.charAt(idx);
+      el.style.color = SCRAMBLE[lvl];
+      el.style.transform = "none";
+      return;
+    }
+    var p = (t - lock) / SETTLE;
+    if (p > 1) p = 1;
+    var osc = p >= 1 ? 0 : -Math.cos(p * Math.PI * 2.2) * Math.exp(-4.5 * p);
+    el.textContent = TITLE.charAt(i);
+    el.style.transform =
+      "translateY(" + (7 * osc).toFixed(2) + "px) scale(" + (1 + 0.30 * osc).toFixed(4) + ")";
+    el.style.color = "rgb(" +
+      Math.round(HOT[0] + (INK[0] - HOT[0]) * p) + "," +
+      Math.round(HOT[1] + (INK[1] - HOT[1]) * p) + "," +
+      Math.round(HOT[2] + (INK[2] - HOT[2]) * p) + ")";
+  }
+
+  window.reelDraw = function (t) {
+    /* 一条时间线只算一个「前沿」值，下划线宽度和百分比都从它派生 */
+    var f = (t - T0) / STEP;
+    var front = clamp(f + 1, 0, N);
+    for (var i = 0; i < N; i++) drawChar(i, t);
+    fillEl.style.width = (front / N * geo.w).toFixed(2) + "px";
+    var done = t >= T1;
+    var pct = Math.round(front / N * 100);
+    statusEl.textContent = done ? "LOCKED 100%" : "DECODING " + ("00" + pct).slice(-3) + "%";
+    statusEl.style.color = done ? "#1d1a15" : "#c0392b";
+  };
+})();
+</script>
+</body>
+</html>

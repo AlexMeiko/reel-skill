@@ -1,0 +1,292 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 28 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>特效 09 · 3D 卡片翻转 · 主方案（真 3D + 角度驱动可见性）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #dedbd3; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: radial-gradient(118% 132% at 50% 34%, #faf8f3 0%, #f1efe8 44%, #e3e0d7 78%, #d9d5cb 100%);
+    color: #1a2b33;
+    font-family: "Noto Sans CJK SC", system-ui, sans-serif;
+  }
+  .mono { font-family: "Noto Sans Mono CJK SC", monospace; font-variant-numeric: tabular-nums; }
+
+  /* ---------- 页眉 / 页脚 ---------- */
+  .head { position: absolute; left: 64px; top: 62px; }
+  .h-title { font-size: 40px; line-height: 1; letter-spacing: .02em; color: #16262e; }
+  .h-sub { margin-top: 12px; font-size: 19px; letter-spacing: .10em; color: #63757d; }
+  .foot { position: absolute; left: 64px; top: 654px; font-size: 17px; letter-spacing: .08em; color: #7d8b92; }
+
+  /* ---------- 右上角仪表：面指示 + 角度读数（全部由 deg 派生） ---------- */
+  .instr { position: absolute; right: 64px; top: 62px; width: 192px; }
+  .i-cap { text-align: right; font-size: 15px; letter-spacing: .20em; color: #6d7d85; }
+  .gauge { position: relative; height: 36px; margin-top: 10px; }
+  .g-lab { position: absolute; top: 0; width: 64px; text-align: center; font-size: 18px; letter-spacing: .06em; color: #16262e; }
+  .g-lab.l0 { left: 0; } .g-lab.l1 { left: 64px; } .g-lab.l2 { left: 128px; }
+  .g-rail { position: absolute; left: 0; top: 27px; width: 192px; height: 3px; background: rgba(26,43,51,.15); }
+  .g-pin { position: absolute; left: 0; top: 26px; width: 64px; height: 5px; background: #c2410c; }
+  .i-deg { display: flex; justify-content: flex-end; align-items: flex-start; margin-top: 14px; }
+  .wheel { position: relative; overflow: hidden; height: 44px; }
+  .w-sign { width: 18px; } .w-d { width: 30px; }
+  .w-strip { position: absolute; left: 0; top: 0; width: 100%; }
+  .w-cell { display: block; height: 44px; line-height: 44px; text-align: center; font-size: 34px; color: #16262e; }
+  .i-unit { margin-left: 3px; font-size: 22px; line-height: 44px; color: #6d7d85; }
+
+  /* ---------- 舞台：透视 + 卡片 ---------- */
+  .scene { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; perspective: 1400px; }
+  /* 投影是独立元素，不是 .card 上的 filter：filter 是 group 属性，会把 preserve-3d 压平（见 README 踩坑 1） */
+  .shadow {
+    position: absolute; left: 50%; top: 50%; width: 660px; height: 420px;
+    margin: -210px 0 0 -330px; z-index: 0;
+    background: radial-gradient(closest-side, rgba(22,38,46,.42) 0%, rgba(22,38,46,.24) 40%, rgba(22,38,46,.08) 68%, rgba(22,38,46,0) 100%);
+  }
+  .card {
+    position: absolute; left: 50%; top: 50%; width: 560px; height: 340px;
+    margin: -170px 0 0 -280px; z-index: 1;
+    transform-style: preserve-3d;
+  }
+  .face {
+    position: absolute; left: 0; top: 0; width: 560px; height: 340px;
+    box-sizing: border-box; border-radius: 8px;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  }
+  .front { transform: translateZ(8px); background: #ffffff; border: 1px solid rgba(26,43,51,.14); }
+  .back {
+    transform: rotateY(180deg) translateZ(8px);
+    background: linear-gradient(158deg, #1e313b 0%, #16262e 62%, #122029 100%);
+    border: 1px solid rgba(255,255,255,.12);
+    color: #f2efe8;
+  }
+  /* 卡片厚度：两条 16px 侧棱，绕 Y 转 90°，让 90° 附近看到的是「边」而不是空白 */
+  .edge {
+    position: absolute; left: 50%; top: 0; width: 16px; height: 340px; margin-left: -8px;
+    background: linear-gradient(90deg, #c6c0b3 0%, #f4f1e9 48%, #b3ada0 100%);
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  }
+  .edge-l { transform: translateX(-272px) rotateY(-90deg); }
+  .edge-r { transform: translateX(272px) rotateY(90deg); }
+
+  /* ---------- 正面内容 ---------- */
+  .f-body { position: absolute; left: 0; top: 0; width: 560px; height: 340px; box-sizing: border-box;
+            padding: 30px 34px 28px; display: flex; flex-direction: column; }
+  .f-kicker { font-size: 18px; letter-spacing: .14em; color: #5f7580; }
+  .f-metric { margin-top: 26px; display: flex; align-items: baseline; }
+  .f-num { font-size: 96px; line-height: 1; letter-spacing: -.01em; color: #16262e; }
+  .f-unit { margin-left: 14px; font-size: 24px; color: #5f7580; }
+  .f-rule { margin-top: auto; height: 1px; background: rgba(26,43,51,.16); }
+  .f-foot { margin-top: 16px; display: flex; justify-content: space-between; align-items: baseline; font-size: 18px; }
+  .f-delta { color: #c2410c; letter-spacing: .04em; }
+  .f-src { color: #7b8b93; }
+
+  /* ---------- 背面内容 ---------- */
+  .b-body { position: absolute; left: 0; top: 0; width: 560px; height: 340px; box-sizing: border-box;
+            padding: 30px 34px 28px; display: flex; flex-direction: column; }
+  .b-head { display: flex; justify-content: space-between; align-items: baseline; }
+  .b-title { font-size: 24px; letter-spacing: .06em; color: #f4f2ec; }
+  .b-total { font-size: 17px; letter-spacing: .04em; color: #93a7b1; }
+  .b-rows { margin-top: 12px; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: space-between; }
+  .b-row { display: flex; align-items: center; height: 44px; }
+  .b-lab { width: 46px; font-size: 19px; letter-spacing: .04em; color: #a9bac2; }
+  .b-track { flex: 1 1 auto; margin: 0 14px; height: 12px; border-radius: 3px;
+             background: rgba(255,255,255,.10); overflow: hidden; }
+  .b-bar { display: block; height: 12px; width: 0; border-radius: 3px;
+           background: linear-gradient(90deg, #a8481a 0%, #f08a4b 100%); }
+  .b-val { width: 58px; text-align: right; font-size: 20px; color: #e8ecEE; }
+  .b-row.sum { border-top: 1px solid rgba(255,255,255,.10); height: 52px; }
+  .b-row.sum .b-lab { color: #f0b183; }
+  .b-row.sum .b-val { color: #f0b183; }
+  .b-row.sum .b-track { background: rgba(255,255,255,.16); }
+  .b-row.sum .b-bar { background: linear-gradient(90deg, #c2410c 0%, #ffb27a 100%); }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div class="head">
+    <div class="h-title">设备接入总览</div>
+    <div class="h-sub">翻转看构成 · 可见性由 rotateY 角度几何决定</div>
+  </div>
+
+  <div class="instr">
+    <div class="i-cap">ROTATE Y</div>
+    <div class="gauge">
+      <span class="g-lab l0" id="gl0">正面</span>
+      <span class="g-lab l1" id="gl1">侧视</span>
+      <span class="g-lab l2" id="gl2">背面</span>
+      <div class="g-rail"></div>
+      <div class="g-pin" id="gpin"></div>
+    </div>
+    <div class="i-deg">
+      <span class="wheel w-sign" id="wsign"><span class="w-strip" id="wsigns"></span></span>
+      <span class="wheel w-d" id="wd0"><span class="w-strip" id="wd0s"></span></span>
+      <span class="wheel w-d" id="wd1"><span class="w-strip" id="wd1s"></span></span>
+      <span class="wheel w-d" id="wd2"><span class="w-strip" id="wd2s"></span></span>
+      <span class="i-unit">°</span>
+    </div>
+  </div>
+
+  <div class="scene">
+    <div class="shadow" id="shadow"></div>
+    <div class="card" id="card">
+      <div class="edge edge-l"></div>
+      <div class="edge edge-r"></div>
+      <div class="face front">
+        <div class="f-body">
+          <div class="f-kicker">2024 Q3 · 全国设备接入</div>
+          <div class="f-metric"><span class="f-num mono">1,284</span><span class="f-unit">万台</span></div>
+          <div class="f-rule"></div>
+          <div class="f-foot"><span class="f-delta">较上季 +11.4%</span><span class="f-src">统计截至 09-30</span></div>
+        </div>
+      </div>
+      <div class="face back">
+        <div class="b-body">
+          <div class="b-head"><span class="b-title">构成拆解</span><span class="b-total">单位：万台</span></div>
+          <div class="b-rows">
+            <div class="b-row"><span class="b-lab">华东</span><span class="b-track"><i class="b-bar" id="bar0"></i></span><span class="b-val mono">512</span></div>
+            <div class="b-row"><span class="b-lab">华南</span><span class="b-track"><i class="b-bar" id="bar1"></i></span><span class="b-val mono">431</span></div>
+            <div class="b-row"><span class="b-lab">华北</span><span class="b-track"><i class="b-bar" id="bar2"></i></span><span class="b-val mono">341</span></div>
+            <div class="b-row sum"><span class="b-lab">合计</span><span class="b-track"><i class="b-bar" id="bar3"></i></span><span class="b-val mono">1,284</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">特效 09 · 3D 卡片翻转 · 正面 / 背面 / 背面补偿角全部由同一个 deg 派生</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var R = (typeof reel !== "undefined" && reel) ? reel : {
+    span: function (t, a, b) { if (!(b > a)) return t >= b ? 1 : 0; var x = (t - a) / (b - a); return x < 0 ? 0 : (x > 1 ? 1 : x); },
+    clamp: function (x, a, b) { return x < a ? a : (x > b ? b : x); },
+    easeOut: function (u) { u = u < 0 ? 0 : (u > 1 ? 1 : u); return 1 - Math.pow(1 - u, 3); }
+  };
+
+  /* ================= 时间轴（字面量常量，全片只有一个开始时刻与一个结束时刻） =================
+     0.00 – 0.30  静态起手：正面卡片完整静止（t=0 是可当封面的完整壳）
+     0.30 – 2.50  翻转：deg = 180 · easeInOutBack(u)  —— 先回摆 -7.4°，再掠过 90°，过冲到 187.4°，回落到 180°
+     2.50 – 4.62  背面数据落位：三行分项条依次生长，合计条补满整条轨道
+     4.62 – 5.00  定格收尾（0.38s 静止结束态）
+     angle 在 t≥2.50 后恒为 180.000，背面完全稳定；后段运动全部是背面内容，不是卡片在动。 */
+  var T0 = 0.30, T1 = 2.50;              // 翻转区间
+  var BACK_S = 1.0;                      // easeInOutBack 的过冲系数 → 过冲 7.42° / 回摆 7.42°
+  var TB = [2.50, 2.74, 2.98, 3.80];     // 四条横条的起跑时刻
+  var BD = [0.80, 0.80, 0.80, 0.82];     // 各自时长
+
+  /* ================= 几何（唯一真值，只在这里写一次） ================= */
+  var CW = 560, CH = 340, CT = 16;       // 卡片宽 / 高 / 厚度
+  var TRACK = 360;                       // 背面轨道像素宽
+  var TOTAL = 1284;                      // 正面大数与背面合计是同一个数
+  var VALS = [512, 431, 341, 1284];      // 512 + 431 + 341 = 1284（背面自洽）
+
+  /* 每条的最终像素长：全部分母都是 1284，所以第四条必然正好补满 360px 轨道 */
+  var BARMAX = VALS.map(function (v) { return TRACK * v / TOTAL; });
+
+  /* ================= 缓动（全是闭式函数，无状态） ================= */
+  function easeInOutBack(u, s) {
+    u = R.clamp(u, 0, 1); s = (s == null) ? 1.70158 : s;
+    var c = s * 1.525;
+    return u < 0.5
+      ? (Math.pow(2 * u, 2) * ((c + 1) * 2 * u - c)) / 2
+      : (Math.pow(2 * u - 2, 2) * ((c + 1) * (2 * u - 2) + c) + 2) / 2;
+  }
+
+  /* ================= 角度里程表（数字永远不写 textContent，只平移纸带） =================
+     为什么不用 textContent：每帧改 DOM 文本会触发 Chromium 字形栅格化的 1/255 抖动，
+     高负载下「同一 t 两次截帧」会不一致（见 _shared/PATTERNS.md §6.1）。纸带平移没有这个问题。 */
+  var CELL = 44;
+  var D_CELLS = [" ", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];  // 索引 0 = 前导空位
+  var S_CELLS = [" ", "\u2212"];                                          // 索引 1 = 负号
+
+  function buildStrip(el, cells) {
+    var f = document.createDocumentFragment();
+    for (var i = 0; i < cells.length; i++) {
+      var c = document.createElement("span");
+      c.className = "w-cell";
+      c.textContent = cells[i];
+      f.appendChild(c);
+    }
+    el.appendChild(f);
+  }
+  var sStrips = [
+    document.getElementById("wsigns"),
+    document.getElementById("wd0s"),
+    document.getElementById("wd1s"),
+    document.getElementById("wd2s")
+  ];
+  buildStrip(sStrips[0], S_CELLS);
+  buildStrip(sStrips[1], D_CELLS);
+  buildStrip(sStrips[2], D_CELLS);
+  buildStrip(sStrips[3], D_CELLS);
+
+  /* ================= DOM ================= */
+  var cardEl = document.getElementById("card");
+  var shadowEl = document.getElementById("shadow");
+  var pinEl = document.getElementById("gpin");
+  var labs = [document.getElementById("gl0"), document.getElementById("gl1"), document.getElementById("gl2")];
+  var bars = [document.getElementById("bar0"), document.getElementById("bar1"), document.getElementById("bar2"), document.getElementById("bar3")];
+
+  /* ================= 唯一的每帧入口：画面 = f(t) ================= */
+  window.reelDraw = function (t) {
+    /* --- 1. 单一真值：翻转角 --- */
+    var deg = 180 * easeInOutBack(R.span(t, T0, T1), BACK_S);
+    var rad = deg * Math.PI / 180;
+
+    /* --- 2. 卡片姿态：只写这一个 transform --- */
+    cardEl.style.transform = "rotateY(" + deg.toFixed(3) + "deg)";
+
+    /* --- 3. 投影：同一个 deg 派生。卡片投影宽 = 面宽·|cos| + 厚度·|sin| --- */
+    var cs = Math.abs(Math.cos(rad));
+    var sn = Math.abs(Math.sin(rad));
+    var sx = (CW * cs + CT * sn) / CW;
+    shadowEl.style.transform =
+      "translateX(" + (-20 * Math.sin(rad)).toFixed(2) + "px) scale(" +
+      sx.toFixed(4) + "," + (0.84 + 0.16 * cs).toFixed(4) + ")";
+    shadowEl.style.opacity = (0.58 + 0.42 * cs).toFixed(3);
+
+    /* --- 4. 面指示：pos 与卡片姿态同源，0=正面 1=侧视 2=背面 --- */
+    var pos = R.clamp(deg / 180, 0, 1) * 2;
+    pinEl.style.transform = "translateX(" + (pos * 64).toFixed(3) + "px)";
+    for (var i = 0; i < 3; i++) {
+      labs[i].style.opacity = (1 - 0.62 * Math.min(1, Math.abs(pos - i))).toFixed(3);
+    }
+
+    /* --- 5. 角度读数：同源 --- */
+    sStrips[0].style.transform = "translateY(" + (deg < -0.5 ? -CELL : 0) + "px)";
+    var v = Math.min(999, Math.round(Math.abs(deg)));
+    var PLACE = [100, 10, 1];
+    var started = false;
+    for (var c = 0; c < 3; c++) {
+      var d = Math.floor(v / PLACE[c]) % 10;
+      var idx;
+      if (!started && d === 0 && c < 2) { idx = 0; }      // 前导零留空位，最低位永远显示
+      else { started = true; idx = d + 1; }
+      sStrips[c + 1].style.transform = "translateY(" + (-idx * CELL).toFixed(0) + "px)";
+    }
+
+    /* --- 6. 背面数据落位：四条横条，各自一次插值，各写一次 width --- */
+    for (var k = 0; k < 4; k++) {
+      bars[k].style.width = (BARMAX[k] * R.easeOut(R.span(t, TB[k], TB[k] + BD[k]))).toFixed(2) + "px";
+    }
+  };
+})();
+</script>
+</body>
+</html>

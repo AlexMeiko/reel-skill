@@ -1,0 +1,402 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 22 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：B 类 —— 用到加色混合 / 发光，换浅底时把 screen 改 multiply、发光改投影，机制不变。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>全息投影 hologram · 主方案（成形扫描与持续扫描共用同一个 y(t)）</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #03060d; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: radial-gradient(780px 540px at 660px 320px, #0e2237 0%, #071426 44%, #03060d 100%);
+    color: #cfe9f5;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  #scene { position: absolute; left: 0; top: 0; }
+
+  .title { position: absolute; left: 72px; top: 38px; }
+  .title .h {
+    font-size: 40px; font-weight: 700; letter-spacing: .07em; line-height: 1;
+    color: #eaf9ff; text-shadow: 0 0 20px rgba(47,228,255,.42);
+  }
+  .title .s {
+    margin-top: 8px; font-size: 15px; font-weight: 500;
+    letter-spacing: .30em; color: #4fb6cf;
+  }
+
+  .law { position: absolute; left: 72px; top: 548px; width: 400px; }
+  .law .f {
+    font-size: 19px; line-height: 27px; letter-spacing: 0; color: #bfeeff; white-space: nowrap;
+    font-family: "Noto Sans Mono CJK SC", ui-monospace, monospace;
+  }
+  .law .f b { color: #ffcb70; font-weight: 600; }
+  .law .n { margin-top: 8px; font-size: 16px; line-height: 24px; color: #6d8ba0; letter-spacing: .01em; white-space: nowrap; }
+  .law .n i { font-style: normal; color: #2fe4ff; }
+
+  #hud { position: absolute; left: 1000px; top: 560px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <svg id="scene" width="1280" height="720" viewBox="0 0 1280 720" aria-label="底座上方的全息线框立方体，正在被扫描线由下往上成形">
+    <defs>
+      <!-- 成形遮罩：成形前沿以上全部裁掉。rect 的 y 由 reelDraw 写，值来自 y(t) -->
+      <clipPath id="formClip" clipPathUnits="userSpaceOnUse">
+        <rect id="formRect" x="0" y="0" width="1280" height="0" />
+      </clipPath>
+
+      <!-- 扫描线两端的横向淡出 -->
+      <linearGradient id="hgrad" x1="330" y1="0" x2="990" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0"    stop-color="#000000" />
+        <stop offset="0.14" stop-color="#ffffff" />
+        <stop offset="0.50" stop-color="#ffffff" />
+        <stop offset="0.86" stop-color="#ffffff" />
+        <stop offset="1"    stop-color="#000000" />
+      </linearGradient>
+      <mask id="hmask">
+        <rect x="330" y="0" width="660" height="720" fill="url(#hgrad)" />
+      </mask>
+
+      <!-- 扫描带：上沿最亮，向下淡出（拖在扫描线身后 = 刚成形的区域） -->
+      <linearGradient id="bandGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0"   stop-color="#2fe4ff" stop-opacity="0.60" />
+        <stop offset="0.35" stop-color="#2fe4ff" stop-opacity="0.22" />
+        <stop offset="1"   stop-color="#2fe4ff" stop-opacity="0" />
+      </linearGradient>
+
+      <!-- 体积填充：底亮顶淡 -->
+      <linearGradient id="volGrad" x1="0" y1="145" x2="0" y2="555" gradientUnits="userSpaceOnUse">
+        <stop offset="0"   stop-color="#2fe4ff" stop-opacity="0.03" />
+        <stop offset="0.62" stop-color="#2fe4ff" stop-opacity="0.13" />
+        <stop offset="1"   stop-color="#39f0ff" stop-opacity="0.30" />
+      </linearGradient>
+
+      <!-- 体积上的静态扫描纹理（只改 opacity，不动纹理） -->
+      <pattern id="scanPat" width="8" height="4" patternUnits="userSpaceOnUse">
+        <rect x="0" y="0" width="8" height="1" fill="#9df4ff" opacity="0.55" />
+      </pattern>
+
+      <filter id="blur4"  x="-30%" y="-400%" width="160%" height="900%">
+        <feGaussianBlur stdDeviation="4" />
+      </filter>
+      <filter id="blur12" x="-30%" y="-300%" width="160%" height="700%">
+        <feGaussianBlur stdDeviation="12" />
+      </filter>
+      <filter id="blurEdge" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="3.2" />
+      </filter>
+
+      <radialGradient id="baseGrad" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0"   stop-color="#2fe4ff" stop-opacity="0.42" />
+        <stop offset="0.55" stop-color="#2fe4ff" stop-opacity="0.14" />
+        <stop offset="1"   stop-color="#2fe4ff" stop-opacity="0" />
+      </radialGradient>
+      <linearGradient id="beamGrad" x1="0" y1="620" x2="0" y2="230" gradientUnits="userSpaceOnUse">
+        <stop offset="0"   stop-color="#2fe4ff" stop-opacity="0.26" />
+        <stop offset="0.55" stop-color="#2fe4ff" stop-opacity="0.09" />
+        <stop offset="1"   stop-color="#2fe4ff" stop-opacity="0" />
+      </linearGradient>
+    </defs>
+
+    <g id="grid"></g>
+
+    <!-- 投射光锥 -->
+    <polygon id="beam" points="470,612 850,612 902,236 418,236" fill="url(#beamGrad)" opacity="0" />
+    <!-- 底座泛光 -->
+    <ellipse id="baseGlow" cx="660" cy="606" rx="330" ry="112" fill="url(#baseGrad)" opacity="0" />
+    <!-- 底座光环 -->
+    <ellipse id="ringWide" cx="660" cy="600" rx="252" ry="64" fill="none" stroke="#2fe4ff"
+             stroke-width="14" opacity="0" filter="url(#blur12)" />
+    <ellipse id="ring" cx="660" cy="600" rx="252" ry="64" fill="none" stroke="#5ceaff" stroke-width="2.4" opacity="0" />
+    <ellipse id="ringIn" cx="660" cy="600" rx="176" ry="44" fill="none" stroke="#2fe4ff" stroke-width="1.4"
+             opacity="0" stroke-dasharray="7 9" />
+    <!-- 成形完成时的扩散脉冲 -->
+    <ellipse id="pulse" cx="660" cy="600" rx="252" ry="64" fill="none" stroke="#8ff6ff" stroke-width="2.6" opacity="0" />
+
+    <!-- 未成形的蓝图骨架：静态，永远最暗，是 t=0 静态壳的一部分 -->
+    <g id="ghost" fill="none" stroke="#3d8fa8" stroke-width="1.6" stroke-dasharray="6 7" opacity="0.34"></g>
+
+    <!-- 已成形的全息体：整组被 formRect 从下往上揭开 -->
+    <g clip-path="url(#formClip)">
+      <g id="holoWrap">
+        <polygon id="vol" points="660,145 870,250 870,450 660,555 450,450 450,250" fill="url(#volGrad)" opacity="0" />
+        <polygon id="volTex" points="660,145 870,250 870,450 660,555 450,450 450,250" fill="url(#scanPat)" opacity="0" />
+        <g id="lGlow" fill="none" stroke="#2fe4ff" stroke-width="7" opacity="0" filter="url(#blurEdge)"></g>
+        <g id="lCyan" fill="none" stroke="#2fe4ff" stroke-width="2.6" opacity="0" style="mix-blend-mode:screen"></g>
+        <g id="lMag"  fill="none" stroke="#ff44c4" stroke-width="2.2" opacity="0" style="mix-blend-mode:screen"></g>
+        <g id="lCore" fill="none" stroke="#eaf9ff" stroke-width="1.5" opacity="0" style="mix-blend-mode:screen"></g>
+      </g>
+    </g>
+
+    <!-- 扫描线：亮线 + 拖尾带 + 辉光，全部走同一个 y(t) -->
+    <g id="scanG" mask="url(#hmask)">
+      <rect id="band"  x="330" y="0" width="660" height="34" fill="url(#bandGrad)" opacity="0" />
+      <rect id="sglowW" x="330" y="0" width="660" height="30" fill="#2fe4ff" opacity="0" filter="url(#blur12)" />
+      <rect id="sglow" x="330" y="0" width="660" height="11" fill="#5ceaff" opacity="0" filter="url(#blur4)" />
+      <rect id="sline" x="330" y="0" width="660" height="2.6" fill="#fff6e2" opacity="0" />
+    </g>
+  </svg>
+
+  <div class="title">
+    <div class="h">全息投影</div>
+    <div class="s">HOLOGRAM · 特效 22</div>
+  </div>
+
+  <div class="law">
+    <div class="f">y(t) = 720 − (<b>83</b> + <b>205</b>t) mod <b>610</b></div>
+    <div class="n">成形前沿 = clamp(y, 145, 555)</div>
+    <div class="n">持续扫描线 = y &nbsp;— 同一个 y(t)</div>
+  </div>
+
+  <canvas id="hud" width="200" height="96"></canvas>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var NS = "http://www.w3.org/2000/svg";
+
+  /* =========================================================================
+     1. 唯一的扫描真值 —— 整个特效只有这一条 y 轴时间线
+     -------------------------------------------------------------------------
+     相位 s(t) = (83 + 205·t) mod 610      （取模，不是累加器）
+     扫描线 y(t) = 720 − s(t)
+     · 成形前沿  = clamp( y(t), 145, 555 )   ← 同一个 y(t)，只是夹了一下
+     · 持续扫描线 = y(t)                     ← 同一个 y(t)，不夹
+     两个常量 145/555 不是手填的，是从 y(T_FORM) / y(T0) 反推出来的：
+       y(0.40) = 555 → 立方体底点   y(2.40) = 145 → 立方体顶点
+     所以「成形结束时扫描线正好落在立方体顶点」不是巧合，是同一个式子的必然。
+     ========================================================================= */
+  var S0 = 83, V = 205, H = 610, Y_LO = 720;
+  var T0 = 0.40, T_FORM = 2.40;
+  function scanS(t) { var s = (S0 + V * t) % H; return s < 0 ? s + H : s; }
+  function scanY(t) { return Y_LO - scanS(t); }
+  var Y_HI  = Y_LO - H;        // 110 扫描可达的最高点
+  var Y_TOP = scanY(T_FORM);   // 145 立方体顶点
+  var Y_BOT = scanY(T0);       // 555 立方体底点
+
+  var RATE = 17;               // 抖动时间量子 Hz：与 30fps 互质（30/17=1.76 帧），绝不取 30/2=15
+  var BEATS = [1.12, 1.86, 3.42, 4.12, 4.74];   // 偶发信号抖动，字面量表
+  var BEAT_W = 0.13;
+
+  function hash(i) { var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123; return x - Math.floor(x); }
+  function beatEnv(t) {
+    var m = 0;
+    for (var i = 0; i < BEATS.length; i++) {
+      var d = t - BEATS[i];
+      if (d >= 0 && d <= BEAT_W) { var e = 1 - d / BEAT_W; if (e > m) m = e; }
+    }
+    return m;
+  }
+
+  /* ---------- 2. 几何：等距立方体，顶点由 Y_TOP / Y_BOT 反推 ---------- */
+  var CD = 105, CH = 200;                       // 等距 2:1 的斜边高 / 立方体竖高
+  var CYT = Y_TOP + CD;                         // 250
+  var CX = 660, CW = 210;
+  if (CYT + CD + CH !== Y_BOT) console.warn("cube height mismatch");
+  var P = [
+    [CX,      CYT - CD], [CX + CW, CYT],      [CX,      CYT + CD], [CX - CW, CYT],
+    [CX, CYT - CD + CH], [CX + CW, CYT + CH], [CX, CYT + CD + CH], [CX - CW, CYT + CH]
+  ];
+  // 12 条棱；back=true 的是被挡在后面的 3 条（汇于底后顶点 P[4]）
+  var EDGES = [
+    { a: 0, b: 1 }, { a: 1, b: 2 }, { a: 2, b: 3 }, { a: 3, b: 0 },
+    { a: 4, b: 5, back: 1 }, { a: 5, b: 6 }, { a: 6, b: 7 }, { a: 7, b: 4, back: 1 },
+    { a: 0, b: 4, back: 1 }, { a: 1, b: 5 }, { a: 2, b: 6 }, { a: 3, b: 7 }
+  ];
+
+  function mk(name, attrs) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  var $ = function (id) { return document.getElementById(id); };
+  var formRect, ghostG, vol, volTex, lGlow, lCyan, lMag, lCore, holoWrap;
+  var band, sglowW, sglow, sline, ringWide, ring, ringIn, baseGlow, beam, pulse;
+  var hud, ctx, LINE = {};
+
+  function build() {
+    formRect = $("formRect"); ghostG = $("ghost"); vol = $("vol"); volTex = $("volTex");
+    lGlow = $("lGlow"); lCyan = $("lCyan"); lMag = $("lMag"); lCore = $("lCore"); holoWrap = $("holoWrap");
+    band = $("band"); sglowW = $("sglowW"); sglow = $("sglow"); sline = $("sline");
+    ringWide = $("ringWide"); ring = $("ring"); ringIn = $("ringIn"); baseGlow = $("baseGlow");
+    beam = $("beam"); pulse = $("pulse");
+    hud = $("hud"); ctx = hud.getContext("2d");
+
+    /* 地面网格：静态，只在 load 时写一次 */
+    var grid = $("grid"), HZ = 560, i, x, k;
+    for (i = 1; i <= 13; i++) {
+      x = HZ + Math.pow(i, 1.75) * 1.35;
+      if (x > 720) break;
+      grid.appendChild(mk("line", { x1: 0, y1: x, x2: 1280, y2: x, stroke: "#1d4b63", "stroke-width": 1, opacity: (0.30 - i * 0.016).toFixed(3) }));
+    }
+    for (k = -7; k <= 7; k++) {
+      var xb = 660 + k * 190;
+      grid.appendChild(mk("line", { x1: 660 + (xb - 660) * 0.10, y1: HZ, x2: xb, y2: 720, stroke: "#1d4b63", "stroke-width": 1, opacity: "0.20" }));
+    }
+
+    /* 12 条棱 × 4 层 + 1 层蓝图 */
+    for (i = 0; i < EDGES.length; i++) {
+      var e = EDGES[i], p1 = P[e.a], p2 = P[e.b];
+      LINE[i] = {
+        my: (p1[1] + p2[1]) / 2,
+        back: !!e.back,
+        g: ghostG.appendChild(mk("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] })),
+        glow: lGlow.appendChild(mk("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] })),
+        cy: lCyan.appendChild(mk("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] })),
+        mg: lMag.appendChild(mk("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] })),
+        co: lCore.appendChild(mk("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] })),
+        o: ""
+      };
+      // 底面的 4 条棱在未成形时亮一点：像投影仪打在地面上的靶框
+      LINE[i].g.style.opacity = (e.a >= 4 && e.b >= 4) ? "0.85" : "0.42";
+    }
+
+    // 一次性静态文案（用文本节点，不是逐帧改写）
+    /* 把 canvas 仪表要用的字体在 load 时就「请求」下来。
+       capture.mjs 在截帧前 await document.fonts.ready，而 fonts.ready 只等
+       「已经挂起的加载」—— 如果第一帧才第一次 ctx.fillText，那次绘制会落到回退字体上，
+       字体到位后再换一次，同一 t 的两次截帧就可能差 1/255（PATTERNS §6.1/§6.3）。
+       显式 load 一下，让它变成挂起的加载，fonts.ready 就真的会等它。 */
+    try {
+      if (document.fonts && document.fonts.load) {
+        document.fonts.load('600 21px "Noto Sans Mono CJK SC"').catch(function () {});
+        document.fonts.load('400 13px "Noto Sans Mono CJK SC"').catch(function () {});
+        document.fonts.load('600 14px "Noto Sans CJK SC"').catch(function () {});
+      }
+    } catch (e) {}
+
+    window.__holo = {
+      S0: S0, V: V, H: H, Y_LO: Y_LO, T0: T0, T_FORM: T_FORM,
+      Y_TOP: Y_TOP, Y_BOT: Y_BOT, Y_HI: Y_HI, RATE: RATE,
+      scanY: function (t) { return scanY(t); },
+      formY: function (t) { return t >= T_FORM ? Y_TOP : Math.max(Y_TOP, Math.min(Y_BOT, scanY(t))); }
+    };
+  }
+  if (document.readyState === "complete") build();
+  else window.addEventListener("load", build);
+
+  /* =========================================================================
+     3. 每帧只走这一条：先由 y(t) 求出所有派生量，再每个元素各写一次
+     ========================================================================= */
+  window.reelDraw = function (t) {
+    var yScan = scanY(t);                                     // 唯一的真值
+
+    // 成形前沿：同一个 yScan，只夹了一下；t ≥ T_FORM 钉在顶点（单调不回头）
+    var formY = t >= T_FORM ? Y_TOP : Math.max(Y_TOP, Math.min(Y_BOT, yScan));
+    var prog = (Y_BOT - formY) / (Y_BOT - Y_TOP);             // 0 → 1，T_FORM 处恰好 1
+
+    var q = Math.floor(t * RATE);                             // 时间量子（无状态）
+    var beat = beatEnv(t);
+    var lock = Math.exp(-Math.pow((t - T_FORM) / 0.16, 2));   // T_FORM 处的核定闪光
+
+    /* ---- 抖动：量子位移 + 连续微摆 + 节拍大抖（全部是 t 的纯函数） ---- */
+    var jx = (hash(q * 1.7 + 3.1) * 2 - 1) * 1.15 + Math.sin(t * 2.1) * 0.45
+           + (hash(q * 5.1 + 9.7) * 2 - 1) * 6.5 * beat;
+    var jy = (hash(q * 2.9 + 5.3) * 2 - 1) * 0.85 + Math.sin(t * 3.4 + 1.1) * 0.30;
+    holoWrap.setAttribute("transform", "translate(" + jx.toFixed(3) + "," + jy.toFixed(3) + ")");
+
+    /* ---- 成形遮罩：同一个 formY ---- */
+    formRect.setAttribute("y", formY.toFixed(3));
+    formRect.setAttribute("height", (720 - formY).toFixed(3));
+
+    /* ---- 体积与棱：亮度由「离扫描线多近」派生（复合/再结合带） ---- */
+    var lum = (0.94 + 0.30 * lock) * (1 - 0.10 * beat);
+    vol.style.opacity = (prog * 0.80 * lum).toFixed(4);
+    volTex.style.opacity = (prog * 0.30 * lum).toFixed(4);
+
+    var baseOp = prog * lum;
+    lGlow.style.opacity = (baseOp * 0.62).toFixed(4);
+    lCyan.style.opacity = (baseOp * 0.95).toFixed(4);
+    lMag.style.opacity = (baseOp * 0.78).toFixed(4);
+    lCore.style.opacity = (baseOp * 0.95).toFixed(4);
+
+    for (var i = 0; i < EDGES.length; i++) {
+      var L = LINE[i];
+      var hot = reel.clamp(1 - Math.abs(L.my - yScan) / 95, 0, 1);   // 到扫描线的距离 → 再结合发光
+      var o = ((L.back ? 0.42 : 0.60) + (L.back ? 0.40 : 0.55) * hot * hot) * (1 - 0.22 * beat);
+      /* 缓存键必须是「最终写出去的那个值」，不能是中间量 o：
+         成形期里远离扫描线的棱 hot 恒为 0 → o 恒定，若拿 o 当缓存键就会跳过一次写入，
+         于是那条棱的 opacity 被冻结在上一帧的 prog×o 上 —— 画面就变成了历史的函数。
+         （这条正是 verify 的「换 seek 路径」检查抓出来的：t=2.5 直取 vs 先经 0/1.25 。） */
+      var ov = +(o * prog).toFixed(3);
+      if (ov !== L.o) {
+        L.glow.style.opacity = ov.toFixed(3);
+        L.cy.style.opacity = ov.toFixed(3);
+        L.mg.style.opacity = ov.toFixed(3);
+        L.co.style.opacity = ov.toFixed(3);
+        L.o = ov;
+      }
+      /* 色散：同一帧内由 yScan 派生（越靠近扫描线越散），再乘量子抖动。
+         绝不逐帧累积 —— 偏移量是 t 的纯函数，换个 seek 路径结果一样。 */
+      var amt = (0.45 + 2.55 * hot * hot) * (1 + 1.5 * lock) * (0.70 + 0.60 * hash(q * 2.7 + i * 1.3));
+      L.cy.setAttribute("transform", "translate(" + (-amt).toFixed(3) + ",0)");
+      L.mg.setAttribute("transform", "translate(" + (amt).toFixed(3) + ",0)");
+      L.co.setAttribute("transform", "translate(0,0)");
+    }
+
+    /* ---- 扫描线：亮线 / 辉光 / 拖尾带全部用同一个 yScan ---- */
+    var lineOn = reel.span(t, 0.18, 0.55);                       // 起手渐亮（前 0.2s 是纯静态壳）
+    var fadeHi = reel.clamp((yScan - Y_HI) / 30, 0, 1);          // 到顶淡出
+    var fadeLo = reel.clamp((Y_LO - yScan) / 30, 0, 1);          // 从底淡入
+    var vis = lineOn * Math.min(fadeHi, fadeLo);
+    // 取模回绕发生在 vis=0 的位置（y=110 → y=720），所以回绕在画面上看不见
+    band.style.opacity    = (reel.span(t, T_FORM, T_FORM + 0.40) * vis * (1 - 0.25 * beat)).toFixed(4);
+    sglowW.style.opacity  = (vis * 0.34).toFixed(4);
+    sglow.style.opacity   = (vis * 0.62).toFixed(4);
+    sline.style.opacity   = (vis * (0.88 + 0.12 * (1 - beat))).toFixed(4);
+    band.setAttribute("y", yScan.toFixed(3));
+    sglowW.setAttribute("y", (yScan - 15).toFixed(3));
+    sglow.setAttribute("y", (yScan - 5.5).toFixed(3));
+    sline.setAttribute("y", (yScan - 1.3).toFixed(3));
+
+    /* ---- 底座：同一个 prog 驱动 ---- */
+    var breathe = 1 + 0.022 * Math.sin(t * 2.6);
+    ringWide.style.opacity = (prog * 0.50 * breathe).toFixed(4);
+    ring.style.opacity     = ((0.14 + 0.72 * prog) * breathe).toFixed(4);
+    ringIn.style.opacity   = ((0.08 + 0.44 * prog) * breathe).toFixed(4);
+    baseGlow.style.opacity = ((0.10 + 0.78 * prog) * breathe).toFixed(4);
+    beam.style.opacity     = ((0.22 + 0.78 * prog) * 0.55).toFixed(4);
+    ring.setAttribute("rx", (252 + 3 * Math.sin(t * 1.7)).toFixed(2));
+
+    /* ---- 成形瞬间的扩散脉冲：事件时刻就是 T_FORM 这一个字面量 ---- */
+    var pu = reel.span(t, T_FORM, T_FORM + 0.95);
+    pulse.style.opacity = (t >= T_FORM ? (1 - pu) * (1 - pu) * 0.60 : 0).toFixed(4);
+    pulse.setAttribute("rx", (252 + 250 * reel.easeOut(pu)).toFixed(2));
+    pulse.setAttribute("ry", (64 + 62 * reel.easeOut(pu)).toFixed(2));
+
+    /* ---- 场景内仪表：读数与文案同源于 yScan / prog，画进 canvas 避开字形栅格化抖动 ---- */
+    var done = t >= T_FORM;
+    var pct = done ? 1 : Math.min(prog, 0.99);                   // 未达成时夹到 0.99
+    ctx.clearRect(0, 0, 200, 96);
+    ctx.font = '600 21px "Noto Sans Mono CJK SC", ui-monospace, monospace';
+    ctx.fillStyle = "#e6f9ff";
+    ctx.fillText("y " + Math.round(yScan) + " px", 0, 23);
+    ctx.font = '400 13px "Noto Sans Mono CJK SC", ui-monospace, monospace';
+    ctx.fillStyle = "#6d8ba0";
+    ctx.fillText("s " + Math.round(scanS(t)) + " / " + H + "  mod", 0, 43);
+    ctx.fillText("成形 " + Math.round(pct * 100) + "%", 0, 61);
+    ctx.fillStyle = "rgba(47,228,255,.18)";
+    ctx.fillRect(0, 68, 190, 4);
+    ctx.fillStyle = done ? "#6ef2c0" : "#ffcb70";
+    ctx.fillRect(0, 68, 190 * pct, 4);
+    ctx.font = '600 14px "Noto Sans CJK SC", system-ui, sans-serif';
+    ctx.fillStyle = t < T0 ? "#6d8ba0" : (done ? "#6ef2c0" : "#ffcb70");
+    ctx.fillText(t < T0 ? "待机 STANDBY" : (done ? "成形完成 HOLO-LOCK" : "扫描成形中 BUILDING"), 0, 90);
+  };
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!-- 反例 A4：CSS infinite 动画。
+     待验证的假设：seek.js 会 pauseAnimations + setCurrentTime，所以 infinite
+     其实「可 seek」；它违反的是「末帧必须是结束态」——t=duration 时红点回到起点。
+     期望结果：确定性可能通过，但末帧 = 第 0 帧。 -->
+<script>window.REEL = { duration: 4, fps: 30, width: 1280, height: 720 };</script>
+<style>
+  html, body { margin: 0; }
+  .stage { position: relative; width: 1280px; height: 720px; overflow: hidden;
+           background: #0e1116; color: #e8eef4;
+           font-family: system-ui, "Noto Sans CJK SC", sans-serif; }
+  .track { position: absolute; left: 140px; width: 1000px; height: 3px; background: #2a3140; }
+  .dot { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; }
+  #ok  { background: #3ddc97; box-shadow: 0 0 18px #3ddc97; }
+  #bad { background: #ff4d6d; box-shadow: 0 0 18px #ff4d6d;
+         animation: slide 2s linear infinite; }
+  @keyframes slide { from { left: 140px; } to { left: 1140px; } }
+  .tag { position: absolute; left: 140px; font-size: 17px; opacity: .75; }
+  h1 { position: absolute; left: 140px; top: 40px; margin: 0; font-size: 34px; }
+  .sub { position: absolute; left: 140px; top: 92px; font-size: 18px; opacity: .7; }
+  #readout { position: absolute; left: 140px; top: 610px; font-size: 20px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <h1>反例 A4 · CSS infinite 动画</h1>
+  <div class="sub">红点 2s 一轮无限循环 —— 到 t=4.0s（末帧）它回到了起点</div>
+
+  <div class="track" style="top: 300px"></div>
+  <div class="dot" id="ok" style="top: 300px"></div>
+  <div class="tag" style="top: 330px">正解：0→1 走完就停在终点（fill: both）</div>
+
+  <div class="track" style="top: 470px"></div>
+  <div class="dot" id="bad" style="top: 470px"></div>
+  <div class="tag" style="top: 500px">反例：animation: slide 2s linear infinite</div>
+
+  <div id="readout"></div>
+</div>
+<script>
+  var D = window.REEL.duration, X0 = 140, X1 = 1140;
+  function reelDraw(t) {
+    var u = reel.easeInOut(reel.span(t, 0.2, D - 0.2));
+    var x = X0 + (X1 - X0) * u;
+    document.getElementById("ok").style.left = x + "px";
+    var bad = document.getElementById("bad").getBoundingClientRect().left;
+    document.getElementById("readout").textContent =
+      "t=" + t.toFixed(3) + "s   正解 x=" + x.toFixed(1) + "px   反例 x=" + bad.toFixed(1) + "px";
+  }
+</script>
+</body>
+</html>

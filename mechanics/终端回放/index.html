@@ -1,0 +1,332 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 16 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>终端回放 · terminal playback</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #070a0e; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #0a0e14;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  .stage canvas { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; display: block; }
+</style>
+</head>
+<body>
+<div class="stage"><canvas id="cv" width="1280" height="720"></canvas></div>
+<script>
+(function () {
+  "use strict";
+
+  /* ==========================================================================
+     终端回放 —— 预计算时间表 + 二分查找
+     画面 = f(t)。整个「打字 / 逐行 / 停顿 / 报错 / 框选」的时间轴在 load 时
+     一次性展开成字面量表 LINES，播放期只做两件事：二分查到当前条目、算行内进度。
+     没有任何累加器、定时器、随机数。
+     ========================================================================== */
+
+  /* ---------- 0. 画布与布局常量 ---------- */
+  var cv = document.getElementById("cv");
+  var ctx = cv.getContext("2d");
+  var W = 1280, H = 720;
+  var MONO = '"Noto Sans Mono CJK SC", monospace';
+  var SANS = 'system-ui, "Noto Sans CJK SC", sans-serif';
+
+  var WIN = { x: 100, y: 107, w: 1080, h: 506, r: 14 };
+  var TITLE_H = 46;
+  var PAD_X = 26, PAD_T = 14, PAD_B = 14;
+  var LINE_H = 36, FS = 22;
+  var CX = WIN.x + PAD_X;                       // 126
+  var CY = WIN.y + TITLE_H + PAD_T;             // 167
+  var CW = WIN.w - PAD_X * 2;                   // 1028
+  var VIEW_H = WIN.h - TITLE_H - PAD_T - PAD_B; // 432
+  var VISIBLE = Math.floor(VIEW_H / LINE_H);    // 12 行
+  var PROMPT = "$ ";
+
+  var C_BG0 = "#0b1016", C_BG1 = "#06090d";
+  var C_WIN = "#0c1219", C_WIN_LINE = "#212b37";
+  var C_TITLE = "#131b24", C_TITLE_LINE = "#1e2833", C_TITLE_TXT = "#7b8a9b";
+  var C_DOT1 = "#f2686b", C_DOT2 = "#e3b341", C_DOT3 = "#4ec9b0";
+  var C_HIST = "#55606d", C_TXT = "#e8eef5", C_OUT = "#bcc8d4";
+  var C_ACC = "#4ec9b0", C_ACC_DIM = "#2f6f64", C_ERR = "#f2686b";
+  var C_SEL = "rgba(78,201,176,0.10)";
+
+  /* ---------- 1. 时间轴：唯一的字面量来源 ---------- */
+  var TYPE_CPS = 34;      // 逐字速率（> 帧率 30 → 每帧至少落一个新字符，见 README §2.2）
+  var OUT_DUR = 0.20;     // 每行输出的横向刷出时长
+  var MARK_BOX = 0.50;    // 框选条生长时长
+  var MARK_TAG = 0.24;    // 标签进场时长
+  var T_TEXT = 0.26;      // 起手静止壳结束、开始敲入的时刻
+
+  var CMD = "python build_report.py --month 2025-08 --channels all --out report.md";
+
+  // 「工具上一次跑」留下的历史 —— t=0 就在画面里，构成静态壳
+  var PRE = [
+    "$ ls report/",
+    "2025-05.md  2025-06.md  2025-07.md",
+    "$ python build_report.py --month 2025-07",
+    "  读取 data/sales.csv · 11,905 行",
+    "  渠道 3 类 · 直营 / 分销 / 线上",
+    "  写入 report/2025-07.md · 82 KB",
+    "  校验 7/7 通过",
+    "完成 · 用时 1.31s",
+    "$ git status --short",
+    " M report/2025-07.md"
+  ];
+
+  // 本次回放要逐行刷出的输出（其中一行是报错）
+  var OUTS = [
+    { kind: "out", text: "  读取 data/sales.csv · 12,480 行" },
+    { kind: "out", text: "  渠道 3 类：直营 38% / 分销 41% / 线上 21%" },
+    { kind: "out", text: "  聚合 2025-08 · 6 张表" },
+    { kind: "err", text: "  错误 data/sales.csv:4812 日期越界，已跳过" },
+    { kind: "out", text: "  写入 report/2025-08.md · 86 KB" },
+    { kind: "out", text: "  校验 7/7 通过" },
+    { kind: "out", text: "  更新 report/index.json" },
+    { kind: "out", text: "  完成 · 用时 1.24s" }
+  ];
+
+  var SCRIPT = [];
+  (function () {
+    for (var i = 0; i < PRE.length; i++) SCRIPT.push({ kind: "pre", text: PRE[i] });
+    SCRIPT.push({ kind: "prompt", text: PROMPT });
+    SCRIPT.push({ kind: "type", text: CMD, cps: TYPE_CPS });
+    SCRIPT.push({ kind: "pause", text: "", dur: 0.16 });
+    for (var j = 0; j < OUTS.length; j++) SCRIPT.push({ kind: OUTS[j].kind, text: OUTS[j].text, dur: OUT_DUR });
+    SCRIPT.push({ kind: "mark", text: "已选中 " + OUTS.length + " 行输出", dur: MARK_BOX + MARK_TAG });
+  })();
+
+  /* ---------- 2. load 时把 SCRIPT 展开成时间表（纯计算，只跑一次） ----------
+     每条：{ row 行号, kind 类型, text 文本, t0 起始时刻, t1 结束时刻, cps 逐字速率 }
+     kind: pre 历史 / prompt 提示符 / type 逐字敲入 / pause 停顿 / out 逐行输出
+           / err 报错行 / mark 框选高亮
+     pre 与 prompt 在 t=0 就存在（t0=t1=0）；prompt 与紧随的 type 共用同一行号。 */
+  function buildSchedule(script, tText) {
+    var L = [], row = 0, t = tText;
+    for (var i = 0; i < script.length; i++) {
+      var s = script[i], kind = s.kind, len = s.text.length;
+      var r, t0, t1 = 0;
+      if (kind === "pre") { r = row; row += 1; t0 = 0; }
+      else if (kind === "prompt") { r = row; t0 = 0; }              // type 与它同行
+      else if (kind === "type") { r = row; row += 1; t0 = t; t1 = t + len / s.cps; t = t1; }
+      else if (kind === "pause") { r = Math.max(0, row - 1); t0 = t; t1 = t + s.dur; t = t1; }
+      else if (kind === "mark") { r = Math.max(0, row - 1); t0 = t; t1 = t + s.dur; t = t1; }
+      else { r = row; row += 1; t0 = t; t1 = t + s.dur; t = t1; }   // out / err
+      L.push({ row: r, kind: kind, text: s.text, t0: t0, t1: t1, cps: s.cps || 0 });
+    }
+    return L;
+  }
+  var LINES = buildSchedule(SCRIPT, T_TEXT);
+  var N = LINES.length;
+  var MARK_T0 = LINES[N - 1].t0;
+  var OUT_ROW0 = 0, OUT_ROW1 = 0;
+  (function () {
+    for (var i = 0; i < N; i++) {
+      if (LINES[i].kind === "out" || LINES[i].kind === "err") {
+        if (!OUT_ROW0) OUT_ROW0 = LINES[i].row;
+        OUT_ROW1 = LINES[i].row;
+      }
+    }
+  })();
+
+  /* ---------- 3. 二分查找：给定 t，定位当前条目 ---------- */
+  function lineIndexAt(t) {
+    var lo = 0, hi = N - 1, best = 0;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (LINES[mid].t0 <= t) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return best;
+  }
+  function prevTextIdx(i) {
+    for (var j = i; j >= 0; j--) if (LINES[j].kind !== "pause" && LINES[j].kind !== "mark") return j;
+    return 0;
+  }
+  // 条目 idx 在 t 时刻已显示的字符数（行内进度）
+  function charsShown(idx, t, i) {
+    var e = LINES[idx], n = e.text.length;
+    if (idx > i) return 0;
+    if (e.kind === "type") n = Math.floor((t - e.t0) * e.cps);
+    else if (e.kind === "out" || e.kind === "err") n = Math.floor(span(t, e.t0, e.t1) * e.text.length);
+    return n < 0 ? 0 : (n > e.text.length ? e.text.length : n);
+  }
+
+  /* ---------- 4. 时间原语（自包含，不依赖注入） ---------- */
+  function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
+  function span(t, a, b) { if (!(b > a)) return t >= b ? 1 : 0; return clamp((t - a) / (b - a), 0, 1); }
+  function easeOut(u) { u = clamp(u, 0, 1); return 1 - Math.pow(1 - u, 3); }
+  function textW(s) { return ctx.measureText(s).width; }
+
+  /* ---------- 5. 绘制小工具 ---------- */
+  function pathRound(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  function pathTop(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h);
+    ctx.beginPath();
+    ctx.moveTo(x, y + h);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h);
+    ctx.closePath();
+  }
+  function dot(x, y, c) {
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.2832); ctx.fillStyle = c; ctx.fill();
+  }
+
+  /* ---------- 6. 主绘制：唯一的时间入口 ---------- */
+  function reelDraw(t) {
+    var i = lineIndexAt(t);
+    var cur = LINES[i];
+
+    // 自动滚动：偏移由「已占行数 − 可视行数」解析求出，不做累加
+    var scrollRows = Math.max(0, cur.row + 1 - VISIBLE);
+
+    // 光标停在最后一条有文字的条目的行尾（停顿 / 框选期也不例外）
+    var ci = (cur.kind === "pause" || cur.kind === "mark") ? prevTextIdx(i) : i;
+    var ce = LINES[ci];
+    var shown = charsShown(ci, t, i);
+
+    // 框选阶段（表里最后一条）——几何量在这里一次算好
+    var sel = null;
+    if (i >= N - 1) {
+      var mt = LINES[N - 1];
+      var vr0 = OUT_ROW0 - scrollRows, vr1 = OUT_ROW1 - scrollRows;
+      sel = {
+        top: CY + vr0 * LINE_H + 3,
+        bot: CY + (vr1 + 1) * LINE_H - 3,
+        u: span(t, mt.t0, mt.t0 + MARK_BOX),
+        ut: span(t, mt.t0 + MARK_BOX, mt.t0 + MARK_BOX + MARK_TAG),
+        tag: mt.text
+      };
+      sel.h = (sel.bot - sel.top) * easeOut(sel.u);
+    }
+
+    /* --- 6.1 背景 --- */
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, C_BG0); g.addColorStop(1, C_BG1);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    /* --- 6.2 终端窗口 --- */
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.55)"; ctx.shadowBlur = 28; ctx.shadowOffsetY = 12;
+    pathRound(WIN.x, WIN.y, WIN.w, WIN.h, WIN.r);
+    ctx.fillStyle = C_WIN; ctx.fill();
+    ctx.restore();
+    pathRound(WIN.x, WIN.y, WIN.w, WIN.h, WIN.r);
+    ctx.strokeStyle = C_WIN_LINE; ctx.lineWidth = 1; ctx.stroke();
+
+    /* --- 6.3 标题栏 --- */
+    pathTop(WIN.x, WIN.y, WIN.w, TITLE_H, WIN.r);
+    ctx.fillStyle = C_TITLE; ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(WIN.x, WIN.y + TITLE_H + 0.5);
+    ctx.lineTo(WIN.x + WIN.w, WIN.y + TITLE_H + 0.5);
+    ctx.strokeStyle = C_TITLE_LINE; ctx.lineWidth = 1; ctx.stroke();
+    dot(WIN.x + 26, WIN.y + 23, C_DOT1);
+    dot(WIN.x + 46, WIN.y + 23, C_DOT2);
+    dot(WIN.x + 66, WIN.y + 23, C_DOT3);
+    ctx.font = "15px " + SANS;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = C_TITLE_TXT;
+    ctx.fillText("build_report · zsh · ~/proj/demo", WIN.x + WIN.w / 2, WIN.y + 24);
+
+    /* --- 6.4 框选底色（画在文字下面，像真正的选区） --- */
+    if (sel && sel.h > 1) {
+      pathRound(CX - 12, sel.top, CW + 20, sel.h, 6);
+      ctx.fillStyle = C_SEL; ctx.fill();
+    }
+
+    /* --- 6.5 终端内容：把 0..i 全部条目各画一次 --- */
+    ctx.font = FS + "px " + MONO;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    for (var j = 0; j <= i; j++) {
+      var e = LINES[j];
+      if (e.kind === "pause" || e.kind === "mark") continue;
+      var vr = e.row - scrollRows;
+      if (vr < 0 || vr >= VISIBLE) continue;
+      var show = e.text;
+      if (j === i && (e.kind === "type" || e.kind === "out" || e.kind === "err")) {
+        show = e.text.slice(0, charsShown(j, t, i));
+      }
+      drawEntry(e, show, vr);
+    }
+
+    /* --- 6.6 框选描边 + 标签 --- */
+    if (sel && sel.h > 1) {
+      pathRound(CX - 12, sel.top, CW + 20, sel.h, 6);
+      ctx.strokeStyle = C_ACC; ctx.lineWidth = 2; ctx.stroke();
+      if (sel.ut > 0) {
+        ctx.save();
+        ctx.globalAlpha = sel.ut;
+        ctx.font = "16px " + SANS;
+        ctx.textAlign = "right"; ctx.textBaseline = "middle";
+        ctx.fillStyle = C_ACC;
+        ctx.fillText(sel.tag, CX + CW + 8 - 18 + (1 - easeOut(sel.ut)) * 12, sel.top + 24);
+        ctx.restore();
+      }
+    }
+
+    /* --- 6.7 方块光标：方波 floor(t*2)%2，不是 CSS 动画 --- */
+    ctx.font = FS + "px " + MONO;
+    var cy = CY + (ce.row - scrollRows) * LINE_H + LINE_H / 2;
+    var cx = CX + (ce.kind === "type" ? Math.round(textW(PROMPT)) : 0)
+              + Math.round(textW(ce.text.slice(0, shown)));
+    if (Math.floor(t * 2) % 2 === 0) {
+      ctx.fillStyle = C_ACC;
+      ctx.fillRect(cx, cy - 12, 12, 24);
+    } else {
+      ctx.strokeStyle = C_ACC_DIM; ctx.lineWidth = 2;
+      ctx.strokeRect(cx + 1, cy - 11, 10, 22);
+    }
+  }
+
+  function drawEntry(e, show, vr) {
+    var y = CY + vr * LINE_H + LINE_H / 2;
+    var x = CX;
+    if (e.kind === "type") {
+      x = CX + Math.round(textW(PROMPT));            // 提示符由 prompt 条目负责画
+      ctx.fillStyle = C_TXT;
+    } else if (e.kind === "err") { ctx.fillStyle = C_ERR; }
+    else if (e.kind === "out") { ctx.fillStyle = C_OUT; }
+    else if (e.kind === "prompt") { ctx.fillStyle = C_ACC; }
+    else {
+      if (show.slice(0, 2) === PROMPT) {             // 历史里的提示符用暗青
+        ctx.fillStyle = C_ACC_DIM; ctx.fillText(PROMPT, x, y);
+        ctx.fillStyle = C_HIST;
+        ctx.fillText(show.slice(2), x + Math.round(textW(PROMPT)), y);
+        return;
+      }
+      ctx.fillStyle = C_HIST;
+    }
+    if (show) ctx.fillText(show, x, y);
+  }
+
+  window.reelDraw = reelDraw;
+  window.__LINES = LINES;
+})();
+</script>
+</body>
+</html>

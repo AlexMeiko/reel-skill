@@ -1,0 +1,435 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 9 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>条形竞赛 · 主方案（排名插值 rankLerp）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #ddd8cd; }
+  .stage {
+    position: relative; width: 1280px; height: 720px; overflow: hidden;
+    background: #f4f1ea; color: #22303a;
+    font-family: "Noto Sans CJK SC", system-ui, sans-serif;
+  }
+  .kicker { position: absolute; left: 64px; top: 42px; font-size: 17px;
+            letter-spacing: .14em; color: #8a97a0; }
+  .title  { position: absolute; left: 64px; top: 68px; font-size: 36px;
+            font-weight: 700; letter-spacing: .01em; }
+  .sub    { position: absolute; left: 64px; top: 120px; font-size: 18px; color: #7b8891; }
+  .rule   { position: absolute; left: 64px; top: 158px; width: 1152px; height: 1px;
+            background: rgba(34,48,58,.22); }
+  .src    { position: absolute; left: 64px; top: 640px; font-size: 15px; color: #8a97a0; }
+  .chip   { position: absolute; right: 64px; top: 630px; padding: 6px 14px;
+            background: #cf4a1c; color: #fbf8f3; font-size: 16px; font-weight: 700;
+            letter-spacing: .08em; border-radius: 3px; opacity: 0; }
+  canvas { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  #cback { z-index: 1; }
+  #cfront { z-index: 6; }
+  #bars  { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 2; }
+  #names { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 3; }
+  /* 条高 = 行距的一半：名次交换途中相邻两条最多「相切」，不会糊成一团 */
+  .row { position: absolute; left: 0; top: 178px; width: 1280px; height: 30px; }
+  /* 名字只有 200px 宽的不透明底：交叉的那 2~3 帧里干净地互相遮蔽，不会糊字 */
+  .nm  { position: absolute; left: 86px; top: 178px; width: 200px; height: 30px;
+         text-align: right; font-size: 21px; font-weight: 700; line-height: 30px;
+         background: #f4f1ea; }
+  .track { position: absolute; left: 302px; top: 0; width: 790px; height: 30px;
+           background: rgba(34,48,58,.055); border-radius: 2px; }
+  .bar { position: absolute; left: 302px; top: 0; width: 0; height: 30px; border-radius: 2px; }
+  .bin, .bacc { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+                border-radius: 2px; }
+  .bin  { background: #41525d; }
+  .bacc { background: #cf4a1c; opacity: 0; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <canvas id="cback" width="1280" height="720"></canvas>
+  <div id="bars"></div>
+  <div id="names"></div>
+  <canvas id="cfront" width="1280" height="720"></canvas>
+
+  <div class="kicker">特效 20 &nbsp;/&nbsp; 条形竞赛 · 排名插值</div>
+  <div class="title">月活跃用户 · 六期排名竞赛</div>
+  <div class="sub">单位 万 &nbsp;·&nbsp; 示意数据，非实测；条长、右侧数值、顶部合计 同源</div>
+  <div class="rule"></div>
+  <div class="src">条长 = 值 ÷ 当期最大刻度；名次由 rankLerp 逐帧插值，不做瞬移</div>
+  <div class="chip" id="chip">最终排名</div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  /* 时间原语兜底：capture 会注入 kit（window.reel），直接打开也能渲染 */
+  var R = (typeof reel !== "undefined" && reel) ? reel : {
+    span: function (t, a, b) {
+      if (!(b > a)) return t >= b ? 1 : 0;
+      var x = (t - a) / (b - a);
+      return x < 0 ? 0 : (x > 1 ? 1 : x);
+    },
+    clamp: function (x, a, b) { return x < a ? a : (x > b ? b : x); },
+    easeInOut: function (u) {
+      u = u < 0 ? 0 : (u > 1 ? 1 : u);
+      return u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+    },
+    easeOut: function (u) {
+      u = u < 0 ? 0 : (u > 1 ? 1 : u);
+      return 1 - Math.pow(1 - u, 3);
+    }
+  };
+
+  /* ==================================================================
+     ① 数据（字面量）与时间轴常量
+     ================================================================== */
+  var NAMES = ["星图", "云枢", "墨盒", "长亭", "拾光", "白露"];
+  var QTR   = ["2024 Q1", "2024 Q2", "2024 Q3", "2024 Q4", "2025 Q1", "2025 Q2"];
+  var V = [
+    [ 34, 30, 26, 21, 17, 12],   /* 2024 Q1 */
+    [ 40, 33, 28, 22, 30, 14],   /* 2024 Q2   拾光 5→3 */
+    [ 46, 38, 30, 24, 44, 16],   /* 2024 Q3   拾光 3→2 */
+    [ 54, 44, 33, 27, 60, 19],   /* 2024 Q4   拾光 2→1  ← 头名易主 */
+    [ 68, 52, 35, 36, 82, 24],   /* 2025 Q1   长亭 5→4 */
+    [ 96, 64, 38, 52,128, 40]    /* 2025 Q2   白露 6→5 */
+  ];
+  var AX = [36, 44, 52, 64, 88, 136];   /* 每期「最大刻度」字面量（4 的倍数：四等分仍是整数） */
+  var NE = NAMES.length;
+  var NP = V.length;
+
+  var T_HOLD = 0.28;                    /* 起手静止壳：条长为 0 */
+  var T_V0   = 0.78;                    /* 第一期读数写入完成 */
+  var SLOT   = 0.74;                    /* 每期占的时间槽 */
+  var VAL_D  = 0.26;                    /* 槽内「值插值」时长 */
+  var T_END  = T_V0 + (NP - 1) * SLOT;  /* = 4.48 最后一次重排落定（唯一的结束时刻） */
+  var DECAY  = 0.48;                    /* 上升高亮衰减；4.48 + 0.48 = 4.96 < 末帧 4.9667 */
+  var AXIS0  = 12;
+
+  /* 槽 k（1..5）：S[k] 起点 / TV[k] 值到达 / TR[k] 排名落定 */
+  var S = [], TV = [], TR = [];
+  for (var k = 1; k < NP; k++) {
+    S[k]  = T_V0 + (k - 1) * SLOT;      /* 0.78 1.52 2.26 3.00 3.74 */
+    TV[k] = S[k] + VAL_D;               /* 1.04 1.78 2.52 3.26 4.00 */
+    TR[k] = S[k] + SLOT;                /* 1.52 2.26 3.00 3.74 4.48 */
+  }
+
+  /* ==================================================================
+     ② 排名表（由字面量 V 推出）+ 刻度安全网，load 时各算一次
+     ================================================================== */
+  function ranksOf(row) {
+    var idx = [], e;
+    for (e = 0; e < NE; e++) idx.push(e);
+    idx.sort(function (a, b) { return row[b] - row[a] || a - b; });
+    var r = new Array(NE);
+    for (var i = 0; i < NE; i++) r[idx[i]] = i + 1;
+    return r;
+  }
+  var RK = V.map(ranksOf);
+  /* RK[0]=[1,2,3,4,5,6]  RK[1]=[1,2,4,5,3,6]  RK[2]=[1,3,4,5,2,6]
+     RK[3]=[2,3,4,5,1,6]  RK[4]=[2,3,5,4,1,6]  RK[5]=[2,3,6,4,1,5] */
+  (function guardAxis() {                 /* 改了数据忘了改刻度时，抬到「该期最大值×1.04」上的 4 的倍数 */
+    for (var kk = 0; kk < NP; kk++) {
+      var m = 0;
+      for (var e = 0; e < NE; e++) if (V[kk][e] > m) m = V[kk][e];
+      var need = Math.ceil(m * 1.04 / 4) * 4;
+      if (need > AX[kk]) AX[kk] = need;
+    }
+  })();
+
+  /* ==================================================================
+     ③ 锚点表 —— rankLerp 的全部内容
+     ------------------------------------------------------------------
+     值锚点 VAL_ANCH[e] / 排名锚点 RNK_ANCH[e] / 刻度锚点 AX_ANCH 都是
+     「时刻 → 取值」的单调锚点序列，两锚点之间用 easeInOut 插值。
+
+       值：(0,0) (T_HOLD,0) (T_V0,V0)  然后每槽  (TV[k],V[k]) (TR[k],V[k])
+       刻：(0,AXIS0) (T_HOLD,AXIS0) (T_V0,AX[0]) 然后每槽 (TV[k],AX[k]) (TR[k],AX[k])
+       名：(0,R0) (TV[1],R0) (TR[1],R1) (TV[2],R1) (TR[2],R2) … (TR[5],R5)
+
+     关键：排名在「值插值」期间冻结（先发生的是条长变化），只在
+     [TV[k], TR[k]] 这 0.48s 内连续过渡到 R[k]。于是 y = (rankLerp-1)*ROW_H
+     天然连续 —— 不存在任何跳位帧。值/刻度用同一套锚点时刻 + 同一 easing，
+     所以 vals_i(t) ≤ axisMax(t) 恒成立（条永远不会捅出轨道）。
+     ================================================================== */
+  function buildAnchors() {
+    var valA = [], rnkA = [], axA = [], e, kk;
+    axA.push({ t: 0, v: AXIS0 }, { t: T_HOLD, v: AXIS0 }, { t: T_V0, v: AX[0] });
+    for (e = 0; e < NE; e++) {
+      var va = [{ t: 0, v: 0 }, { t: T_HOLD, v: 0 }, { t: T_V0, v: V[0][e] }];
+      var ra = [{ t: 0, r: RK[0][e] }];
+      for (kk = 1; kk < NP; kk++) {
+        va.push({ t: TV[kk], v: V[kk][e] });
+        va.push({ t: TR[kk], v: V[kk][e] });
+        ra.push({ t: TV[kk], r: RK[kk - 1][e] });
+        ra.push({ t: TR[kk], r: RK[kk][e] });
+      }
+      valA.push(va); rnkA.push(ra);
+    }
+    for (kk = 1; kk < NP; kk++) {
+      axA.push({ t: TV[kk], v: AX[kk] });
+      axA.push({ t: TR[kk], v: AX[kk] });
+    }
+    return { val: valA, rnk: rnkA, axis: axA };
+  }
+  var ANCH = buildAnchors();
+
+  function anchorAt(anch, t, key) {
+    var n = anch.length;
+    if (t <= anch[0].t) return anch[0][key];
+    if (t >= anch[n - 1].t) return anch[n - 1][key];
+    for (var i = 0; i < n - 1; i++) {
+      if (t <= anch[i + 1].t) {
+        var a = anch[i], b = anch[i + 1];
+        var u = R.easeInOut((t - a.t) / (b.t - a.t));
+        return a[key] + (b[key] - a[key]) * u;
+      }
+    }
+    return anch[n - 1][key];
+  }
+
+  /* 每期「上升者」与「升幅最大者」 */
+  var RISER = [], TOPRISE = [];
+  for (k = 1; k < NP; k++) {
+    var up = new Array(NE), best = -1, bestGain = 0;
+    for (var e2 = 0; e2 < NE; e2++) {
+      var gain = RK[k - 1][e2] - RK[k][e2];
+      up[e2] = gain > 0;
+      if (gain > bestGain) { bestGain = gain; best = e2; }
+    }
+    RISER[k] = up;
+    TOPRISE[k] = { e: best, gain: bestGain };
+  }
+
+  /* 上升高亮强度：重排落定瞬间为 1，随后 easeOut 到 0 */
+  function riserHi(e, t) {
+    var best = 0;
+    for (var kk = 1; kk < NP; kk++) {
+      if (!RISER[kk][e] || t < TR[kk]) continue;
+      var h = 1 - R.easeOut(R.span(t, TR[kk], TR[kk] + DECAY));
+      if (h > best) best = h;
+    }
+    return best;
+  }
+
+  /* 「让位」位移：连续路径必然相交（介值定理），相交那一两帧上层条会完全
+     盖住下层条；把上升者的名字在重排中途左移一个名宽再回来，两条名字就
+     不会叠在一起 —— 这是纯 t 的函数，不引入任何跨帧状态。 */
+  function stepAside(e, t) {
+    var best = 0;
+    for (var kk = 1; kk < NP; kk++) {
+      if (!RISER[kk][e] || t < TV[kk] || t > TR[kk]) continue;
+      var s = Math.sin(Math.PI * (t - TV[kk]) / (TR[kk] - TV[kk]));
+      if (s > best) best = s;
+    }
+    return -58 * best;
+  }
+
+  /* ==================================================================
+     ④ 几何
+     ================================================================== */
+  var ROW_H = 60, BAR_H = 30, CHART_TOP = 178, BAR_X = 302, BAR_W = 790;
+  var AXIS_Y = 534, TICK_Y = 552, TL_Y = 596, TL_LABEL_Y = 616;
+  var INK_TXT = "#22303a", ACCENT = "#cf4a1c", GRAY = "#8a97a0";
+  var ON_BAR = "#f8f5ef";
+  var SANS = "\"Noto Sans CJK SC\", system-ui, sans-serif";
+  var MONO = "\"Noto Sans Mono CJK SC\", monospace";
+
+  /* ==================================================================
+     ⑤ 建 DOM：条与名字分成两层（名字要单独做「让位」位移，条不能动）
+     ================================================================== */
+  var rows = [], nms = [];
+  (function build() {
+    var barHost = document.getElementById("bars");
+    var nmHost = document.getElementById("names");
+    var fb = document.createDocumentFragment(), fn = document.createDocumentFragment();
+    for (var e = 0; e < NE; e++) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var tr = document.createElement("div");
+      tr.className = "track";
+      var bar = document.createElement("div");
+      bar.className = "bar";
+      var bin = document.createElement("div");
+      bin.className = "bin";
+      var bacc = document.createElement("div");
+      bacc.className = "bacc";
+      bar.appendChild(bin); bar.appendChild(bacc);
+      row.appendChild(tr); row.appendChild(bar);
+      fb.appendChild(row);
+
+      var nm = document.createElement("div");
+      nm.className = "nm";
+      nm.textContent = NAMES[e];
+      fn.appendChild(nm);
+
+      rows.push({ el: row, bar: bar, acc: bacc });
+      nms.push(nm);
+    }
+    barHost.appendChild(fb);
+    nmHost.appendChild(fn);
+  })();
+
+  var cb = document.getElementById("cback").getContext("2d");
+  var cf = document.getElementById("cfront").getContext("2d");
+  var chipEl = document.getElementById("chip");
+
+  /* ==================================================================
+     ⑥ reelDraw(t)：一次插值 → 全部派生量 → 每个元素各写一次
+     ================================================================== */
+  window.reelDraw = function (t) {
+    var e, kk;
+
+    /* ---- 唯一真值来源 ---- */
+    var vals = new Array(NE), rk = new Array(NE), total = 0;
+    for (e = 0; e < NE; e++) {
+      vals[e] = anchorAt(ANCH.val[e], t, "v");
+      rk[e]   = anchorAt(ANCH.rnk[e], t, "r");
+      total += vals[e];
+    }
+    var axisMax = anchorAt(ANCH.axis, t, "v");
+
+    /* 当前期别：值的到达时刻 TV[k] 就换期 → 期别标签与本帧合计永远同步 */
+    var cur = 0;
+    for (kk = 1; kk < NP; kk++) if (t >= TV[kk]) cur = kk;
+    var tArrive = cur === 0 ? T_V0 : TV[cur];
+    var headOn = 0.20 + 0.80 * R.span(t, T_HOLD, tArrive);
+    var done = t >= T_END;                     /* 唯一的「结束」判据，字面量时刻 */
+    var tt = TOPRISE[1];
+    for (kk = 1; kk < NP; kk++) if (t >= TR[kk]) tt = TOPRISE[kk];
+
+    /* ---- 层序：名次高的在上。DOM 的 z-index 与 canvas 数值标签的抢占顺序
+       用同一个 ord 数组算出 —— 两边不可能不一致（§7.6 同源） ---- */
+    var ord = [];
+    for (e = 0; e < NE; e++) ord.push(e);
+    ord.sort(function (a, b) { return rk[a] - rk[b] || a - b; });
+
+    /* ---- DOM：每个元素每帧各写一次 ---- */
+    for (var pi = 0; pi < NE; pi++) {
+      e = ord[pi];
+      var y = (rk[e] - 1) * ROW_H;
+      rows[e].el.style.zIndex = String(NE - pi);
+      rows[e].el.style.transform = "translateY(" + y.toFixed(2) + "px)";
+      rows[e].bar.style.width = (vals[e] / axisMax * BAR_W).toFixed(2) + "px";
+      rows[e].acc.style.opacity = R.clamp((1.6 - rk[e]) / 0.6, 0, 1).toFixed(3);
+      var hi = riserHi(e, t);
+      rows[e].bar.style.boxShadow = hi > 0.005
+        ? "0 0 0 3px rgba(207,74,28," + (0.50 * hi).toFixed(3) + ")," +
+          " 0 0 20px rgba(207,74,28," + (0.26 * hi).toFixed(3) + ")"
+        : "none";
+      var dx = stepAside(e, t);
+      nms[e].style.transform = "translate(" + dx.toFixed(2) + "px," + y.toFixed(2) + "px)";
+      nms[e].style.zIndex = String(Math.round(-dx) * 4 + (NE - e));
+    }
+    chipEl.style.opacity = done ? R.easeOut(R.span(t, T_END, T_END + 0.30)).toFixed(3) : "0";
+
+    /* ---- 背景 canvas：网格 / 轴线 / 期别标尺 ---- */
+    cb.clearRect(0, 0, 1280, 720);
+    cb.lineWidth = 1;
+    var g, gx;
+    for (g = 1; g <= 4; g++) {
+      gx = Math.round(BAR_X + (g / 4) * BAR_W) + 0.5;
+      cb.strokeStyle = g === 4 ? "rgba(34,48,58,.20)" : "rgba(34,48,58,.10)";
+      cb.beginPath(); cb.moveTo(gx, CHART_TOP); cb.lineTo(gx, AXIS_Y); cb.stroke();
+    }
+    cb.strokeStyle = "rgba(34,48,58,.34)";
+    cb.beginPath(); cb.moveTo(BAR_X, AXIS_Y + 0.5); cb.lineTo(BAR_X + BAR_W, AXIS_Y + 0.5); cb.stroke();
+    cb.fillStyle = GRAY;
+    cb.font = "400 15px " + MONO;
+    cb.textAlign = "center"; cb.textBaseline = "alphabetic";
+    for (g = 1; g <= 4; g++) {
+      /* 刻度值 = 当期最大刻度 × 分数；位置也按同一分数 → 标签与位置严格同源 */
+      cb.fillText(String(Math.round(axisMax * g / 4)), BAR_X + (g / 4) * BAR_W, TICK_Y);
+    }
+    var step = BAR_W / (NP - 1), tx;
+    cb.strokeStyle = "rgba(34,48,58,.16)";
+    cb.beginPath(); cb.moveTo(BAR_X, TL_Y + 0.5); cb.lineTo(BAR_X + BAR_W, TL_Y + 0.5); cb.stroke();
+    for (kk = 0; kk < NP; kk++) {
+      tx = BAR_X + kk * step;
+      var on = kk === cur;
+      cb.strokeStyle = on ? ACCENT : "rgba(34,48,58,.28)";
+      cb.lineWidth = on ? 3 : 1;
+      cb.beginPath(); cb.moveTo(tx, TL_Y - 7); cb.lineTo(tx, TL_Y + 1); cb.stroke();
+      cb.lineWidth = 1;
+      cb.fillStyle = on ? ACCENT : GRAY;
+      cb.font = (on ? "700 " : "400 ") + "14px " + MONO;
+      cb.textAlign = kk === 0 ? "left" : (kk === NP - 1 ? "right" : "center");
+      cb.fillText(QTR[kk], tx, TL_LABEL_Y);
+    }
+
+    /* ---- 前景 canvas：所有会变的数字（避开 DOM 改字的字形栅格化抖动） ---- */
+    cf.clearRect(0, 0, 1280, 720);
+    cf.save();
+    cf.globalAlpha = headOn;
+    cf.textAlign = "right"; cf.textBaseline = "alphabetic";
+    cf.fillStyle = INK_TXT;
+    cf.font = "700 36px " + SANS;
+    cf.fillText(QTR[cur], 1216, 104);
+    var numStr = String(Math.floor(total));          /* floor：真正到位前绝不显示终值 */
+    cf.font = "400 22px " + SANS;
+    var wTail = cf.measureText(" 万").width, wHead = cf.measureText("合计 ").width;
+    cf.font = "700 22px " + SANS;
+    var wNum = cf.measureText(numStr).width;
+    var xNum = 1216 - wTail;
+    cf.font = "400 22px " + SANS;
+    cf.fillStyle = GRAY;
+    cf.fillText(" 万", 1216, 138);
+    cf.fillText("合计 ", xNum - wNum - wHead, 138);
+    cf.fillStyle = INK_TXT;
+    cf.font = "700 22px " + SANS;
+    cf.fillText(numStr, xNum, 138);
+    cf.restore();
+
+    /* 数值标签：贴条端内侧（白字），太短才挂到条右侧。
+       层序与条完全一致：名次相同的 2~3 帧里只画上层那一个，绝不出现
+       「标签写着 A 的数、下面却是 B 的条」这种自相矛盾。 */
+    cf.textBaseline = "middle";
+    cf.font = "700 22px " + SANS;
+    var claimed = [], drawing = [], oi;
+    for (oi = 0; oi < NE; oi++) {               /* 名次高的先占位（与 z 序同源） */
+      var cy0 = CHART_TOP + (rk[ord[oi]] - 1) * ROW_H + BAR_H / 2, hit = 0;
+      for (var ci = 0; ci < claimed.length; ci++) if (Math.abs(claimed[ci] - cy0) < 30) hit = 1;
+      if (!hit) { claimed.push(cy0); drawing.push(ord[oi]); }
+    }
+    for (oi = drawing.length - 1; oi >= 0; oi--) {   /* 从下层往上画 */
+      e = drawing[oi];
+      var cy = CHART_TOP + (rk[e] - 1) * ROW_H + BAR_H / 2;
+      var bw = vals[e] / axisMax * BAR_W;
+      var str = String(Math.floor(vals[e]));
+      var tw = cf.measureText(str).width;
+      if (bw >= tw + 34) {
+        cf.textAlign = "right"; cf.fillStyle = ON_BAR;
+        cf.fillText(str, Math.round(BAR_X + bw - 13), cy);
+      } else {
+        cf.textAlign = "left";
+        cf.fillStyle = rk[e] < 1.5 ? ACCENT : INK_TXT;
+        cf.fillText(str, Math.round(BAR_X + bw + 13), cy);
+      }
+    }
+    /* 名次上升最多的那个：左侧栏 ▲n，重排落定瞬间出现、0.48s 内衰减掉 */
+    if (tt && tt.gain > 0) {
+      var ha = riserHi(tt.e, t);
+      if (ha > 0.02) {
+        var ay = CHART_TOP + (rk[tt.e] - 1) * ROW_H + BAR_H / 2;
+        cf.fillStyle = "rgba(207,74,28," + ha.toFixed(3) + ")";
+        cf.beginPath();
+        cf.moveTo(96, ay + 5); cf.lineTo(107, ay - 6); cf.lineTo(118, ay + 5);
+        cf.closePath(); cf.fill();
+        cf.textAlign = "left";
+        cf.font = "700 17px " + SANS;
+        cf.fillText(String(tt.gain), 120, ay);
+      }
+    }
+  };
+
+  /* 静态壳在 t=0 就位（seek 会立刻调用，这里先画一次保证首帧完整） */
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>

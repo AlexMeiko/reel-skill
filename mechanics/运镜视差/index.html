@@ -1,0 +1,499 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 41 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>运镜与视差 · SINGLE-CAMERA PARALLAX</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #04050b; }
+  .stage {
+    position: relative; width: 1280px; height: 720px; overflow: hidden;
+    background: #0a1024; color: #eef3ff;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  /* 相机只动 .world 里面的层，.stage 的宽高永不改 */
+  .world { position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+           transform-origin: 50% 50%; will-change: transform; }
+  /* 每层比画面大一圈(1920x900)，中心正好落在画面中心(640,360)，所以缩放/旋转同源 */
+  .layer { position: absolute; left: -320px; top: -90px; width: 1920px; height: 900px;
+           transform-origin: 50% 50%; will-change: transform; }
+  .layer > svg { display: block; width: 1920px; height: 900px; }
+  .mote { position: absolute; left: 0; top: 0; width: 7px; height: 7px; border-radius: 50%;
+          background: #ffedc4; box-shadow: 0 0 20px 7px rgba(255,206,132,.62); }
+  .mote.cool { background: #dcefff; box-shadow: 0 0 20px 7px rgba(168,214,255,.55); }
+  .blob { position: absolute; border-radius: 50%; background: #03050c; opacity: .92; }
+  .hud { position: absolute; left: 72px; top: 64px; }
+  .hud h1 { margin: 0; font-size: 36px; font-weight: 800; letter-spacing: .07em;
+            color: #f5f8ff; text-shadow: 0 2px 16px rgba(3,5,14,.85); }
+  .hud .sub { margin: 12px 0 0; font-family: "Noto Sans Mono CJK SC", monospace;
+              font-size: 13px; letter-spacing: .17em; color: #a8b8de;
+              text-shadow: 0 1px 12px rgba(3,5,14,.9); }
+  .phase { position: absolute; right: 72px; top: 64px; text-align: right; }
+  .phase b { display: block; font-size: 23px; font-weight: 700; letter-spacing: .1em;
+             color: #ffdfa4; text-shadow: 0 2px 14px rgba(3,5,14,.9); }
+  .phase span { font-family: "Noto Sans Mono CJK SC", monospace; font-size: 12px;
+                letter-spacing: .2em; color: #a8b8de; }
+  .cam { position: absolute; left: 72px; bottom: 64px;
+         font-family: "Noto Sans Mono CJK SC", monospace; font-size: 18px;
+         letter-spacing: .03em; color: #c9d8f7; line-height: 1.7;
+         text-shadow: 0 1px 12px rgba(3,5,14,.95); }
+  .cam b { color: #ffdfa4; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="world" id="world">
+    <div class="layer" id="Lsky"><svg viewBox="0 0 1920 900" width="1920" height="900">
+      <defs>
+        <linearGradient id="gSky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0"    stop-color="#04061a"/>
+          <stop offset="0.15" stop-color="#0b1334"/>
+          <stop offset="0.30" stop-color="#1d2450"/>
+          <stop offset="0.42" stop-color="#43355f"/>
+          <stop offset="0.50" stop-color="#8a4d5f"/>
+          <stop offset="0.565" stop-color="#d98b45"/>
+          <stop offset="0.615" stop-color="#6b3f54"/>
+          <stop offset="0.74" stop-color="#291733"/>
+          <stop offset="1"    stop-color="#100a19"/>
+        </linearGradient>
+        <radialGradient id="gGlow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0"    stop-color="#ffdca6" stop-opacity="0.88"/>
+          <stop offset="0.38" stop-color="#ff9d55" stop-opacity="0.30"/>
+          <stop offset="1"    stop-color="#ff7a3c" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="gSun" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0"    stop-color="#fffaea"/>
+          <stop offset="0.62" stop-color="#ffeec0"/>
+          <stop offset="0.88" stop-color="#ffd085"/>
+          <stop offset="1"    stop-color="#ff9d47"/>
+        </radialGradient>
+        <filter id="fCloud" filterUnits="userSpaceOnUse" x="-200" y="-200" width="2320" height="1300">
+          <feGaussianBlur stdDeviation="16"/>
+        </filter>
+      </defs>
+      <rect x="0" y="0" width="1920" height="900" fill="url(#gSky)"/>
+      <g id="gStars"></g>
+      <circle id="sunGlow" cx="900" cy="380" r="330" fill="url(#gGlow)"/>
+      <circle id="sunDisc" cx="900" cy="380" r="52" fill="url(#gSun)"/>
+      <g id="gClouds" filter="url(#fCloud)"></g>
+    </svg></div>
+
+    <div class="layer" id="Lfar"><svg viewBox="0 0 1920 900" width="1920" height="900">
+      <defs>
+        <filter id="fHaze" filterUnits="userSpaceOnUse" x="-200" y="-200" width="2320" height="1300">
+          <feGaussianBlur stdDeviation="2.6"/>
+        </filter>
+      </defs>
+      <path id="pFar" fill="#7d6f9e" opacity="0.62" filter="url(#fHaze)"></path>
+    </svg></div>
+
+    <div class="layer" id="Lmid"><svg viewBox="0 0 1920 900" width="1920" height="900">
+      <defs>
+        <filter id="fHaze2" filterUnits="userSpaceOnUse" x="-200" y="-200" width="2320" height="1300">
+          <feGaussianBlur stdDeviation="1"/>
+        </filter>
+      </defs>
+      <path id="pMid" fill="#4d4675" opacity="0.9" filter="url(#fHaze2)"></path>
+      <g id="gBirds"></g>
+    </svg></div>
+
+    <div class="layer" id="Lcity"><svg viewBox="0 0 1920 900" width="1920" height="900">
+      <g id="gCity"></g>
+      <g id="gTower"></g>
+    </svg></div>
+
+    <div class="layer" id="Lhill"><svg viewBox="0 0 1920 900" width="1920" height="900">
+      <path id="pHill" fill="#131a2f"></path>
+      <path id="pHillRim" fill="none" stroke="#33406b" stroke-width="3" opacity="0.75"></path>
+      <g id="gPines"></g>
+    </svg></div>
+
+    <div class="layer" id="Lrail"><svg viewBox="0 0 1920 900" width="1920" height="900">
+      <g id="gRail"></g>
+    </svg>
+      <div class="blob" id="b0"></div>
+      <div class="blob" id="b1"></div>
+    </div>
+
+    <div class="layer" id="Lmote"><div id="gMotes"></div></div>
+  </div>
+
+  <div class="hud">
+    <h1>运镜与视差</h1>
+    <p class="sub">SINGLE-CAMERA PARALLAX <b>/</b> 7 LAYERS <b>/</b> 1280&times;720</p>
+  </div>
+  <div class="phase">
+    <b id="ph">广角起手</b>
+    <span id="phe">WIDE ESTABLISH</span>
+  </div>
+  <div class="cam">
+    <div>CAMERA&nbsp;&nbsp;X <b id="cx">0.0</b>px&nbsp;&nbsp;Y <b id="cy">0.0</b>px&nbsp;&nbsp;Z <b id="cz">0.000</b>&nbsp;&nbsp;ROLL <b id="cr">0.00</b>&deg;</div>
+    <div>DEPTH&nbsp;&nbsp;0.00 &rarr; 1.00&nbsp;&nbsp;&middot;&nbsp;&nbsp;FACTOR = 0.15 + DEPTH&nbsp;&nbsp;&middot;&nbsp;&nbsp;EASE <b id="ce">0.000</b></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var NS = 'http://www.w3.org/2000/svg';
+
+  /* ---------- 时间原语（全部是 t 的闭式函数，无跨帧状态） ---------- */
+  function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
+  function span(t, t0, t1) { return t1 > t0 ? clamp((t - t0) / (t1 - t0), 0, 1) : (t >= t1 ? 1 : 0); }
+  function lerp(a, b, u) { return a + (b - a) * u; }
+  function easeInOut(u) { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); }
+  function hash(i) { var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123; return x - Math.floor(x); }
+
+  /* ---------- 相机：全片唯一的时间真值来源 ---------- */
+  /* 三段节奏（rubric #4）：起手轻推 → 主体右移推近 → 收束微过冲后稳住。
+     两段区间刻意重叠 0.30s，速度不会在接缝处掉到 0，避免「一顿一顿」。 */
+  var T_A0 = 0.30, T_A1 = 1.30, WA = 0.12;          // 起手
+  var T_B0 = 1.00, T_B1 = 3.70, WB = 0.88;          // 主体
+  var T_C0 = 3.70, T_C1 = 4.45, WC = 0.04;          // 收束（sin² 在两端导数为 0，到位即静止）
+  var CAM_X = -180, CAM_Y = 40, CAM_Z = 0.42, CAM_ROLL = -0.9;
+  var F0 = 0.15;                                    // 最远层的系数：factor = F0 + depth
+  function camEase(t) {
+    var s = Math.sin(Math.PI * span(t, T_C0, T_C1));
+    return WA * easeInOut(span(t, T_A0, T_A1))
+         + WB * easeInOut(span(t, T_B0, T_B1))
+         + WC * s * s;
+  }
+  function camAt(t) {
+    var e = camEase(t);
+    return { e: e, x: CAM_X * e, y: CAM_Y * e, z: CAM_Z * e, roll: CAM_ROLL * e };
+  }
+
+  /* ---------- 层深表 ---------- */
+  var LAYERS = [
+    { name: 'sky',  el: document.getElementById('Lsky'),  depth: 0.00 },
+    { name: 'far',  el: document.getElementById('Lfar'),  depth: 0.06 },
+    { name: 'mid',  el: document.getElementById('Lmid'),  depth: 0.24 },
+    { name: 'city', el: document.getElementById('Lcity'), depth: 0.46 },
+    { name: 'hill', el: document.getElementById('Lhill'), depth: 0.66 },
+    { name: 'rail', el: document.getElementById('Lrail'), depth: 0.88 },
+    { name: 'mote', el: document.getElementById('Lmote'), depth: 1.00 }
+  ];
+  var worldEl = document.getElementById('world');
+
+  function el(tag, attrs, parent) {
+    var n = document.createElementNS(NS, tag), k;
+    for (k in attrs) if (Object.prototype.hasOwnProperty.call(attrs, k)) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function $(id) { return document.getElementById(id); }
+  function f1(v) { return (Math.round(v * 10) / 10).toFixed(1); }
+  function f2(v) { return v.toFixed(2); }
+
+  /* ---------- 山脊：控制点 + 中点抖动（抖动在控制点处为 0，所以控制点位置严格可控） ---------- */
+  function ridgePts(cp, seed) {
+    var pts = [], i, j, a, b, u, x, y;
+    for (i = 0; i < cp.length - 1; i++) {
+      a = cp[i]; b = cp[i + 1];
+      for (j = 0; j < 4; j++) {
+        u = j / 4;
+        x = lerp(a[0], b[0], u);
+        y = lerp(a[1], b[1], u) + (hash(i * 13.7 + j * 3.1 + seed) - 0.5) * 18 * Math.sin(Math.PI * u);
+        pts.push([Math.round(x), Math.round(y)]);
+      }
+    }
+    pts.push(cp[cp.length - 1]);
+    return pts;
+  }
+  function ridgeY(pts, x) {
+    for (var i = 1; i < pts.length; i++) {
+      if (x <= pts[i][0]) {
+        var a = pts[i - 1], b = pts[i];
+        var u = (x - a[0]) / Math.max(1, b[0] - a[0]);
+        return lerp(a[1], b[1], u);
+      }
+    }
+    return pts[pts.length - 1][1];
+  }
+  function ridgePath(pts) {
+    var d = 'M' + pts[0][0] + ',' + pts[0][1], i;
+    for (i = 1; i < pts.length; i++) d += 'L' + pts[i][0] + ',' + pts[i][1];
+    return d + 'L1920,900L0,900Z';
+  }
+
+  /* 远景山脊：线在 300~440（画面 y = svg y - 90），900 处刻意留一个鞍部给落日 */
+  var FAR_CP = [[0,432],[130,398],[250,352],[360,392],[470,318],[580,366],[690,418],[790,392],[900,420],[1010,372],[1120,412],[1240,344],[1360,398],[1490,364],[1600,414],[1720,382],[1830,424],[1920,404]];
+  /* 中景山脊 */
+  var MID_CP = [[0,470],[140,436],[300,388],[420,452],[540,410],[660,482],[780,444],[900,468],[1010,420],[1150,462],[1280,404],[1400,470],[1520,430],[1650,486],[1780,446],[1920,480]];
+  /* 前景山丘（栏杆后面那片地） */
+  var HILL_CP = [[0,700],[160,660],[340,700],[520,648],[700,684],[880,640],[1060,678],[1240,634],[1420,672],[1600,644],[1780,690],[1920,664]];
+  var FAR = ridgePts(FAR_CP, 3.7);
+  var MID = ridgePts(MID_CP, 11.3);
+  var HILL = ridgePts(HILL_CP, 5.1);
+
+  /* ---------- 天空 ---------- */
+  var SUNX = 900;
+  var sunY = ridgeY(FAR, SUNX) + 16;      // 落日刚好被远山山脊切掉上半截
+  function buildSky() {
+    var g = $('gStars'), i, x, y, a, clouds;
+    for (i = 0; i < 56; i++) {
+      x = hash(i * 2.7 + 0.7) * 1920;
+      y = 18 + hash(i * 5.3 + 1.9) * 300;
+      a = (0.22 + hash(i * 11.3 + 5.7) * 0.7) * (1 - y / 430);
+      el('circle', { cx: f1(x), cy: f1(y), r: (0.8 + hash(i * 7.9 + 3.1) * 1.2).toFixed(2),
+                     fill: '#e2eaff', opacity: Math.max(0.06, a).toFixed(3) }, g);
+    }
+    clouds = $('gClouds');
+    for (i = 0; i < 10; i++) {
+      y = 120 + hash(i * 3.7 + 1.1) * 330;
+      var warm = y > 330;
+      el('ellipse', {
+        cx: f1(hash(i * 5.1 + 2.3) * 1920), cy: f1(y),
+        rx: f1(110 + hash(i * 9.3 + 4.7) * 300), ry: f1(7 + hash(i * 2.9 + 7.7) * 15),
+        fill: warm ? '#ffb377' : '#372c58',
+        opacity: (warm ? 0.10 + hash(i * 13.1) * 0.13 : 0.20 + hash(i * 17.3) * 0.18).toFixed(3)
+      }, clouds);
+    }
+    $('sunDisc').setAttribute('cy', f1(sunY));
+    $('sunGlow').setAttribute('cy', f1(sunY));
+  }
+
+  /* ---------- 山脊/山丘 ---------- */
+  function buildRidges() {
+    $('pFar').setAttribute('d', ridgePath(FAR));
+    $('pMid').setAttribute('d', ridgePath(MID));
+    $('pHill').setAttribute('d', ridgePath(HILL));
+    $('pHillRim').setAttribute('d', ridgePath(HILL).replace(/L1920,900L0,900Z$/, ''));
+  }
+
+  /* ---------- 中景飞鸟 ---------- */
+  var BIRDS = [];
+  function buildBirds() {
+    var g = $('gBirds');
+    for (var i = 0; i < 3; i++) {
+      BIRDS.push({
+        p: el('path', { fill: 'none', stroke: '#1a2040', 'stroke-width': '2.4', 'stroke-linecap': 'round' }, g),
+        x0: 380 + i * 150 + hash(i * 3.3) * 140,
+        y0: 300 + i * 30 + hash(i * 7.7) * 46,
+        sp: 15 + hash(i * 5.1) * 11,
+        ph: hash(i * 9.9) * 6.283
+      });
+    }
+  }
+  function drawBirds(t) {
+    for (var i = 0; i < BIRDS.length; i++) {
+      var b = BIRDS[i];
+      var x = b.x0 + t * b.sp, y = b.y0 + Math.sin(t * 0.8 + b.ph) * 7;
+      var w = 5 + Math.sin(t * 6.4 + b.ph) * 4;
+      b.p.setAttribute('d', 'M' + f1(x - 9) + ',' + f1(y + w) + 'Q' + f1(x) + ',' + f1(y - w * 0.55) + ' ' + f1(x + 9) + ',' + f1(y + w));
+    }
+  }
+
+  /* ---------- 中景城市剪影 ---------- */
+  var CITY = [];
+  function buildCity() {
+    var g = $('gCity'), towers = [], x = -40, i = 0, d = '', k, c, r, wx, wy, gw;
+    while (x < 1960) {
+      var w = 48 + hash(i * 4.3 + 1.7) * 78;
+      var top = 470 + hash(i * 8.1 + 2.9) * 86;
+      if (i % 5 === 3) top -= 46;                       // 每五栋来一栋高的
+      towers.push({ x: x, w: w, top: top, i: i });
+      x += w + 6 + hash(i * 6.7 + 3.3) * 26;
+      i++;
+    }
+    for (k = 0; k < towers.length; k++) {
+      var T = towers[k];
+      d += 'M' + f1(T.x) + ',700L' + f1(T.x) + ',' + f1(T.top) + 'L' + f1(T.x + T.w) + ',' + f1(T.top) + 'L' + f1(T.x + T.w) + ',700Z';
+      if (T.top < 486) d += 'M' + f1(T.x + T.w * 0.62) + ',' + f1(T.top) + 'L' + f1(T.x + T.w * 0.62) + ',' + f1(T.top - 34) + 'L' + f1(T.x + T.w * 0.62 + 3) + ',' + f1(T.top - 34) + 'L' + f1(T.x + T.w * 0.62 + 3) + ',' + f1(T.top) + 'Z';
+    }
+    el('path', { d: d, fill: '#1b2140' }, g);
+    for (k = 0; k < towers.length; k++) {
+      var B = towers[k];
+      gw = el('g', {}, g);
+      var cols = Math.max(1, Math.floor((B.w - 16) / 15));
+      var rows = Math.max(1, Math.floor((700 - B.top - 24) / 23));
+      for (c = 0; c < cols; c++) {
+        for (r = 0; r < rows; r++) {
+          wx = B.x + 9 + c * 15; wy = B.top + 14 + r * 23;
+          if (wx + 6 > B.x + B.w - 5) continue;
+          if (hash(B.i * 37.1 + c * 7.3 + r * 3.9 + 5.5) < 0.45) continue;
+          el('rect', { x: f1(wx), y: f1(wy), width: 6, height: 9, fill: '#ffd18a' }, gw);
+        }
+      }
+      CITY.push({ g: gw, ph: hash(B.i * 15.7 + 2.2) * 6.283 });
+    }
+  }
+  function drawCity(t) {
+    for (var i = 0; i < CITY.length; i++) {
+      CITY[i].g.setAttribute('opacity', (0.60 + 0.32 * Math.sin(t * 1.55 + CITY[i].ph)).toFixed(3));
+    }
+  }
+
+  /* 350px 高的信号塔：会从落日前面横穿过去（视差最直观的一处） */
+  var towers = [];
+  function buildTower() {
+    var g = $('gTower'), d = '', i, y;
+    var bx = 905, top = 396, bot = 706, halfTop = 2.5, halfBot = 15;
+    d += 'M' + f1(bx - halfTop) + ',' + top + 'L' + f1(bx + halfTop) + ',' + top +
+         'L' + f1(bx + halfBot) + ',' + bot + 'L' + f1(bx - halfBot) + ',' + bot + 'Z';
+    for (i = 0; i <= 6; i++) {                       // 桁架横撑
+      y = lerp(top, bot, i / 6);
+      var hw = lerp(halfTop, halfBot, i / 6);
+      d += 'M' + f1(bx - hw - 7) + ',' + f1(y) + 'L' + f1(bx + hw + 7) + ',' + f1(y);
+    }
+    d += 'M' + f1(bx) + ',' + top + 'L' + f1(bx) + ',' + (top - 26);   // 天线
+    el('path', { d: d, fill: 'none', stroke: '#141931', 'stroke-width': '4', 'stroke-linejoin': 'round' }, g);
+    el('path', { d: 'M' + f1(bx - halfTop) + ',' + top + 'L' + f1(bx + halfTop) + ',' + top + 'L' + f1(bx + halfBot) + ',' + bot + 'L' + f1(bx - halfBot) + ',' + bot + 'Z', fill: '#141931' }, g);
+    var beacon = el('circle', { cx: bx, cy: top - 28, r: 4.2, fill: '#ff7a62' }, g);
+    towers.push({ beacon: beacon });
+  }
+  function drawTower(t) {
+    var a = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 3.4));
+    towers[0].beacon.setAttribute('opacity', a.toFixed(3));
+  }
+
+  /* ---------- 前景山丘上的松林 ---------- */
+  function buildPines() {
+    var g = $('gPines'), x = 8, i = 0, y, h, w;
+    while (x < 1920) {
+      y = ridgeY(HILL, x);
+      h = 26 + hash(i * 7.1 + 4.3) * 48;
+      w = h * 0.44;
+      el('path', { d: 'M' + f1(x) + ',' + f1(y - h) + 'L' + f1(x + w) + ',' + f1(y + 10) + 'L' + f1(x - w) + ',' + f1(y + 10) + 'Z', fill: '#0b1020' }, g);
+      el('path', { d: 'M' + f1(x) + ',' + f1(y - h * 1.24) + 'L' + f1(x + w * 0.72) + ',' + f1(y - h * 0.34) + 'L' + f1(x - w * 0.72) + ',' + f1(y - h * 0.34) + 'Z', fill: '#0b1020' }, g);
+      x += 24 + hash(i * 3.3 + 8.1) * 46;
+      i++;
+    }
+  }
+
+  /* ---------- 最近景栏杆（弧形、每根立柱都算法不同） ---------- */
+  function railTopY(x) { var u = (x - 960) / 960; return 578 + 24 * u * u; }
+  function buildRail() {
+    var g = $('gRail'), x, i, d1 = '', d2 = '', dp = '', dp2 = '';
+    for (i = 0; i <= 48; i++) { x = i * 40; d1 += (i ? 'L' : 'M') + f1(x) + ',' + f1(railTopY(x)); }
+    el('path', { d: d1, fill: 'none', stroke: '#04060e', 'stroke-width': '16', 'stroke-linecap': 'round' }, g);
+    for (i = 0; i <= 48; i++) { x = i * 40; d2 += (i ? 'L' : 'M') + f1(x) + ',' + f1(railTopY(x) + 96); }
+    el('path', { d: d2, fill: 'none', stroke: '#04060e', 'stroke-width': '9' }, g);
+    for (x = 24, i = 0; x < 1920; i++) {
+      dp += 'M' + f1(x) + ',' + f1(railTopY(x) - 6) + 'L' + f1(x) + ',900';
+      if (i % 4 === 0) dp2 += 'M' + f1(x) + ',' + f1(railTopY(x) - 8) + 'L' + f1(x) + ',900';
+      x += 62;
+    }
+    el('path', { d: dp, fill: 'none', stroke: '#04060e', 'stroke-width': '11' }, g);
+    el('path', { d: dp2, fill: 'none', stroke: '#04060e', 'stroke-width': '19' }, g);
+    el('path', { d: d1, fill: 'none', stroke: '#aebde8', 'stroke-width': '2.6', opacity: '0.4', transform: 'translate(0,-7)' }, g);
+  }
+
+  /* ---------- 前景漂浮粒子（确定性） ---------- */
+  var MOTES = [];
+  function buildMotes() {
+    var g = $('gMotes');
+    for (var i = 0; i < 12; i++) {
+      var d = document.createElement('div');
+      d.className = 'mote' + (i % 3 === 2 ? ' cool' : '');
+      g.appendChild(d);
+      MOTES.push({
+        el: d,
+        x: 380 + hash(i * 4.1 + 1.3) * 1120, y: 220 + hash(i * 6.3 + 2.7) * 600,
+        ax: 10 + hash(i * 8.9 + 3.1) * 26, ay: 8 + hash(i * 12.7 + 4.9) * 20,
+        sx: 0.22 + hash(i * 5.7 + 6.1) * 0.3, sy: 0.18 + hash(i * 9.1 + 7.3) * 0.26,
+        pu: 0.9 + hash(i * 14.3 + 8.7) * 1.2, a0: 0.30 + hash(i * 16.9 + 9.7) * 0.5,
+        sc: 0.7 + hash(i * 18.1 + 11.3) * 1.3
+      });
+    }
+  }
+  function drawMotes(t) {
+    for (var i = 0; i < MOTES.length; i++) {
+      var m = MOTES[i], p = m.pu;
+      var x = m.x + Math.sin(t * m.sx + p * 3.1) * m.ax;
+      var y = m.y + Math.cos(t * m.sy + p * 2.3) * m.ay;
+      var s = m.sc * (0.72 + 0.42 * (0.5 + 0.5 * Math.sin(t * m.pu * 0.6 + p)));
+      m.el.style.transform = 'translate3d(' + f2(x) + 'px,' + f2(y) + 'px,0) scale(' + s.toFixed(3) + ')';
+      m.el.style.opacity = (m.a0 * (0.55 + 0.45 * Math.sin(t * m.pu + p * 1.9))).toFixed(3);
+    }
+  }
+  /* 失焦前景（极近景，视差最大，只做两块，压在画面下角） */
+  function buildBlobs() {
+    var b0 = $('b0'), b1 = $('b1');
+    b0.style.width = '420px'; b0.style.height = '300px'; b0.style.left = '-90px'; b0.style.top = '760px';
+    b0.style.filter = 'blur(17px)';
+    b1.style.width = '520px'; b1.style.height = '330px'; b1.style.left = '1660px'; b1.style.top = '780px';
+    b1.style.filter = 'blur(19px)';
+  }
+
+  /* ---------- 唯一的相机写入口：所有层用同一个 cam + 各自系数 ---------- */
+  function drawCam(c) {
+    for (var k = 0; k < LAYERS.length; k++) {
+      var L = LAYERS[k], f = F0 + L.depth;
+      var tx = c.x * f, ty = c.y * f, s = 1 + c.z * f;
+      L.el.style.transform = 'translate3d(' + f2(tx) + 'px,' + f2(ty) + 'px,0) scale(' + s.toFixed(6) + ')';
+      L.last = { tx: tx, ty: ty, s: s, f: f };
+    }
+    worldEl.style.transform = 'rotate(' + c.roll.toFixed(4) + 'deg)';   // 机身横滚：所有层共用
+  }
+
+  /* ---------- HUD：数字和画面同源（同一次 cam 计算） ---------- */
+  var cxEl = $('cx'), cyEl = $('cy'), czEl = $('cz'), crEl = $('cr'), ceEl = $('ce');
+  var phEl = $('ph'), pheEl = $('phe');
+  function drawHud(t, c) {
+    cxEl.textContent = c.x.toFixed(1);
+    cyEl.textContent = c.y.toFixed(1);
+    czEl.textContent = c.z.toFixed(3);
+    crEl.textContent = c.roll.toFixed(2);
+    ceEl.textContent = c.e.toFixed(3);
+    var ph, en;
+    if (t < T_A1) { ph = '起手 · 广角'; en = 'WIDE ESTABLISH'; }
+    else if (t < T_B1) { ph = '主体 · 推近右移'; en = 'DOLLY IN · PAN RIGHT'; }
+    else { ph = '收束 · 定格'; en = 'SETTLE · HOLD'; }
+    if (phEl.textContent !== ph) { phEl.textContent = ph; pheEl.textContent = en; }
+  }
+
+  window.reelDraw = function (t) {
+    var c = camAt(t);
+    drawCam(c);
+    drawHud(t, c);
+    drawCity(t);
+    drawTower(t);
+    drawBirds(t);
+    drawMotes(t);
+  };
+
+  /* ---------- 建静态几何（只跑一次，纯 hash 驱动，确定性） ---------- */
+  buildSky(); buildRidges(); buildBirds(); buildCity(); buildTower(); buildPines(); buildRail(); buildMotes(); buildBlobs();
+  window.reelDraw(0);
+
+  /* ---------- 自查钩子：以 #selftest 打开时，把每层的实际位移/缩放打进 DOM，
+       用 `chromium --headless --dump-dom "file://…/index.html#selftest"` 即可客观复核「层位移严格同源」。 ---------- */
+  if (window.location.hash === '#selftest') {
+    var ts = [0.6, 1.5, 2.5, 3.5, 4.2, 5.0], lines = [], ci, li, c2, L, ratio;
+    for (ci = 0; ci < ts.length; ci++) {
+      window.reelDraw(ts[ci]);
+      c2 = camAt(ts[ci]);
+      lines.push('t=' + ts[ci].toFixed(2) + ' camX=' + c2.x.toFixed(4) + ' camY=' + c2.y.toFixed(4) +
+                 ' camZ=' + c2.z.toFixed(5) + ' roll=' + c2.roll.toFixed(5));
+      for (li = 0; li < LAYERS.length; li++) {
+        L = LAYERS[li];
+        ratio = c2.x !== 0 ? (L.last.tx / c2.x) : NaN;
+        lines.push('   ' + L.name + ' depth=' + L.depth.toFixed(2) + ' f=' + (F0 + L.depth).toFixed(2) +
+                   ' tx=' + L.last.tx.toFixed(3) + ' ty=' + L.last.ty.toFixed(3) + ' s=' + L.last.s.toFixed(6) +
+                   ' tx/camX=' + (c2.x !== 0 ? ratio.toFixed(6) : 'n/a') +
+                   ' (s-1)/camZ=' + (c2.z !== 0 ? ((L.last.s - 1) / c2.z).toFixed(6) : 'n/a'));
+      }
+    }
+    var pre = document.createElement('pre');
+    pre.id = 'selftest';
+    // 必须在视口外：.stage 恰好 1280×720，若这个 <pre> 留在正常流里，
+    // 一旦有人改用整页截图（而不是视口截图），它就会出现在成片下方。
+    pre.style.cssText = 'position:absolute;left:-99999px;top:0;margin:0;';
+    pre.textContent = lines.join('\n');
+    document.body.appendChild(pre);
+    window.reelDraw(0);
+  }
+})();
+</script>
+</body>
+</html>

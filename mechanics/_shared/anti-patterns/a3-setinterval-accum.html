@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!-- 反例 A3：setInterval 累加器。
+     期望结果：非确定 —— 位置取决于页面存活了多久、被 seek 过几次。 -->
+<script>window.REEL = { duration: 4, fps: 30, width: 1280, height: 720 };</script>
+<style>
+  html, body { margin: 0; }
+  .stage { position: relative; width: 1280px; height: 720px; overflow: hidden;
+           background: #0e1116; color: #e8eef4;
+           font-family: system-ui, "Noto Sans CJK SC", sans-serif; }
+  .track { position: absolute; left: 140px; width: 1000px; height: 3px; background: #2a3140; }
+  .dot { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; }
+  #ok  { background: #3ddc97; box-shadow: 0 0 18px #3ddc97; }
+  #bad { background: #ff4d6d; box-shadow: 0 0 18px #ff4d6d; }
+  .tag { position: absolute; left: 140px; font-size: 17px; opacity: .75; }
+  h1 { position: absolute; left: 140px; top: 40px; margin: 0; font-size: 34px; }
+  .sub { position: absolute; left: 140px; top: 92px; font-size: 18px; opacity: .7; }
+  #readout { position: absolute; left: 140px; top: 610px; font-size: 20px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <h1>反例 A3 · setInterval 累加器</h1>
+  <div class="sub">红点位置靠「上一帧 + 步长」累加 —— seek 到 t 也回不到那一刻</div>
+
+  <div class="track" style="top: 300px"></div>
+  <div class="dot" id="ok" style="top: 300px"></div>
+  <div class="tag" style="top: 330px">正解：x 是 t 的闭式函数</div>
+
+  <div class="track" style="top: 470px"></div>
+  <div class="dot" id="bad" style="top: 470px"></div>
+  <div class="tag" style="top: 500px">反例：x += 步长</div>
+
+  <div id="readout"></div>
+</div>
+<script>
+  var D = window.REEL.duration, X0 = 140, X1 = 1140;
+
+  function reelDraw(t) {
+    var u = reel.easeInOut(reel.span(t, 0.2, D - 0.2));
+    var x = X0 + (X1 - X0) * u;
+    document.getElementById("ok").style.left = x + "px";
+    document.getElementById("readout").textContent =
+      "t=" + t.toFixed(3) + "s   正解 x=" + x.toFixed(1) + "px   反例 x=" + badX.toFixed(1) + "px";
+  }
+
+  // ↓↓↓ 反例：累加器
+  var badX = X0;
+  setInterval(function () {
+    badX += (X1 - X0) / (D * 60);          // 按「60 次/秒」拍脑袋累加
+    if (badX > X1) badX = X1;
+    document.getElementById("bad").style.left = badX + "px";
+  }, 1000 / 60);
+</script>
+</body>
+</html>

@@ -1,0 +1,353 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 28 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：B 类 —— 用到加色混合 / 发光，换浅底时把 screen 改 multiply、发光改投影，机制不变。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>粒子聚合 · PARTICLE MORPH</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #04070b; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: radial-gradient(1020px 660px at 50% 47%, #13232f 0%, #0a141d 46%, #04070b 100%);
+    color: #eaf3f8;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  #cv { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  .hd { position: absolute; left: 72px; top: 62px; }
+  .hd h1 { margin: 0; font-size: 46px; line-height: 1.06; font-weight: 800;
+           letter-spacing: .05em; color: #f1f8fc; }
+  .hd .sub { margin: 12px 0 0; font-family: "Noto Sans Mono CJK SC", monospace;
+             font-size: 13px; letter-spacing: .2em; color: #7c92a4; }
+  .hd .sub b { color: #2c4152; font-weight: 400; }
+  .ft { position: absolute; left: 72px; right: 72px; bottom: 64px;
+        display: flex; align-items: center; gap: 16px;
+        font-family: "Noto Sans Mono CJK SC", monospace; font-size: 13px; letter-spacing: .12em; }
+  .ft .dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+             background: currentColor; box-shadow: 0 0 10px currentColor; color: #4c6478; }
+  .ft .ph { flex: 0 0 auto; font-weight: 700; color: #dceaf4; }
+  .ft .en { flex: 0 0 auto; color: #5b7488; }
+  .ft .track { flex: 1 1 auto; height: 2px; background: #16262f; position: relative; overflow: hidden; }
+  .ft .track i { position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+                 background: linear-gradient(90deg, #2b7f8b, #5ce4d6 52%, #ffae4e); }
+  .ft .pct { flex: 0 0 auto; width: 46px; text-align: right; color: #9fb6c4; }
+  .ft .meta { flex: 0 0 auto; color: #4c6478; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <canvas id="cv" width="1280" height="720"></canvas>
+  <header class="hd">
+    <h1>粒子聚合</h1>
+    <p class="sub">PARTICLE MORPH <b>/</b> 1200 PARTICLES <b>/</b> ANALYTIC TRAILS</p>
+  </header>
+  <footer class="ft">
+    <span class="dot" id="dot"></span>
+    <span class="ph" id="ph">待机</span>
+    <span class="en" id="en">STANDBY</span>
+    <div class="track"><i id="fill"></i></div>
+    <span class="pct" id="pct">0%</span>
+    <span class="meta">30 FPS · 1280×720</span>
+  </footer>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- 时间轴常量（全片唯一时间真值来源） ---------- */
+  var T_GO    = 0.40;   // 粒子起飞
+  var T_HOLD  = 3.00;   // 形状完全聚合
+  var T_BURST = 3.50;   // 开始爆散
+  var T_M0    = 3.88;   // 实心字标浮现
+  var T_M1    = 4.55;   // 字标完全浮现
+  // 效果「真正结束」的时刻：爆散终止 + 字标全亮。进度分母用它，**不用 REEL.duration**
+  // —— 末帧是 149/30 = 4.9667s，用 duration 当分母永远差 0.033s，
+  //    会出现「文案说完成、数字说 99%」的反向不一致。
+  var T_END   = 4.65;
+  // 阶段边界一律由进度派生，保证「文案 / 进度条 / 百分比」三者同源
+  var P_GO = T_GO / T_END, P_HOLD = T_HOLD / T_END, P_BURST = T_BURST / T_END;
+
+  var W = 1280, H = 720, TAU = Math.PI * 2;
+  var CX0 = 640, CY0 = 372;          // 形状中心
+  var N = 1200;                      // 粒子数
+  var K = 4;                         // 拖尾解析采样段数
+  var DT = 0.042;                    // 相邻解析采样的时间间隔（秒）
+
+  /* ---------- 确定性伪随机 ---------- */
+  function hash(i) {
+    var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123;
+    return x - Math.floor(x);
+  }
+  function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
+  function span(t, t0, t1) { return t1 > t0 ? clamp((t - t0) / (t1 - t0), 0, 1) : (t >= t1 ? 1 : 0); }
+  function easeOut(u) { var w = 1 - u; return 1 - w * w * w; }
+
+  /* ---------- 目标点集：离屏 canvas 画字 → 采样非透明像素 ---------- */
+  var TEXT = 'REEL';
+  var OW = 1000, OH = 340;
+  var FONT = '700 250px "Noto Sans CJK SC", "Noto Sans CJK JP", sans-serif';
+
+  var SX, SY, CXc, CYc, TX, TY, EX, EY, FX, FY, D0, D1, E0, E1;
+  var PX, PY, BUCKET;
+  var MARK_BASE = CY0;
+
+  function buildTargets() {
+    var oc = document.createElement('canvas');
+    oc.width = OW; oc.height = OH;
+    var c = oc.getContext('2d');
+    c.font = FONT;
+    c.textAlign = 'center';
+    c.textBaseline = 'alphabetic';
+    var m = c.measureText(TEXT);
+    var asc = m.actualBoundingBoxAscent || 180;
+    var desc = m.actualBoundingBoxDescent || 0;
+    var baseY = (OH - (asc + desc)) / 2 + asc;
+    c.fillStyle = '#fff';
+    c.fillText(TEXT, OW / 2, baseY);
+
+    var d = c.getImageData(0, 0, OW, OH).data;
+    var STEP = 3;
+    var xs = [], ys = [];
+    for (var y = 0; y < OH; y += STEP) {
+      for (var x = 0; x < OW; x += STEP) {
+        if (d[(y * OW + x) * 4 + 3] > 140) { xs.push(x); ys.push(y); }
+      }
+    }
+    // 确定性 Fisher-Yates：同一 j 永远同一交换，避免栅格扫描的规则条纹
+    for (var j = xs.length - 1; j > 0; j--) {
+      var r = Math.floor(hash(j * 1.7 + 0.31) * (j + 1));
+      var t1 = xs[j]; xs[j] = xs[r]; xs[r] = t1;
+      var t2 = ys[j]; ys[j] = ys[r]; ys[r] = t2;
+    }
+    MARK_BASE = CY0 - OH / 2 + baseY;
+    return { xs: xs, ys: ys, n: xs.length, baseY: baseY };
+  }
+
+  function init() {
+    var tg = buildTargets();
+    var n = tg.n || 1;
+    SX = new Float32Array(N); SY = new Float32Array(N);
+    CXc = new Float32Array(N); CYc = new Float32Array(N);
+    TX = new Float32Array(N); TY = new Float32Array(N);
+    EX = new Float32Array(N); EY = new Float32Array(N);
+    FX = new Float32Array(N); FY = new Float32Array(N);
+    D0 = new Float32Array(N); D1 = new Float32Array(N);
+    E0 = new Float32Array(N); E1 = new Float32Array(N);
+    PX = new Float32Array((K + 1) * N);
+    PY = new Float32Array((K + 1) * N);
+    BUCKET = new Uint8Array(N);
+
+    for (var i = 0; i < N; i++) {
+      var h1 = hash(i * 1.0), h2 = hash(i * 3 + 1), h3 = hash(i * 7.7 + 13.3);
+      var h4 = hash(i * 5.3 + 2.1), h5 = hash(i * 11.9 + 7.7), h6 = hash(i * 2.3 + 5.5);
+      var h7 = hash(i * 17.3 + 0.7), h8 = hash(i * 23.1 + 3.9);
+
+      TX[i] = CX0 - OW / 2 + tg.xs[i % n];
+      TY[i] = CY0 - OH / 2 + tg.ys[i % n];
+
+      // 起点：半径 780..1160 的环，保证全部在画面外
+      var ang = h1 * TAU;
+      var rad = 780 + h2 * 380;
+      SX[i] = CX0 + Math.cos(ang) * rad;
+      SY[i] = CY0 + Math.sin(ang) * rad;
+
+      // 二次贝塞尔控制点：中点 + 垂线方向偏移 → 弧线入场
+      var dx = TX[i] - SX[i], dy = TY[i] - SY[i];
+      var L = Math.sqrt(dx * dx + dy * dy) || 1;
+      var pp = (h3 * 2 - 1) * (120 + h6 * 160);
+      CXc[i] = (SX[i] + TX[i]) / 2 + (-dy / L) * pp;
+      CYc[i] = (SY[i] + TY[i]) / 2 + (dx / L) * pp;
+
+      // 每颗粒子自己的起飞窗口：0.40..1.65 起飞，+0.80..1.30 到位（最迟 2.95）
+      D0[i] = T_GO + h4 * 1.25;
+      D1[i] = D0[i] + 0.80 + h5 * 0.50;
+
+      // 终点：从形状中心向外径向爆散
+      var ux = TX[i] - CX0, uy = TY[i] - CY0;
+      var ul = Math.sqrt(ux * ux + uy * uy);
+      if (ul < 6) { var a2 = h8 * TAU; ux = Math.cos(a2); uy = Math.sin(a2); ul = 1; }
+      var mag = 360 + h7 * 720;
+      EX[i] = TX[i] + (ux / ul) * mag + (h6 - 0.5) * 140;
+      EY[i] = TY[i] + (uy / ul) * mag + (h6 - 0.5) * 140 + 46;
+      FX[i] = (TX[i] + EX[i]) / 2 + (h8 - 0.5) * 90;
+      FY[i] = (TY[i] + EY[i]) / 2 + 70 + h6 * 70;
+      E0[i] = T_BURST + h8 * 0.30;
+      E1[i] = E0[i] + 0.58 + h4 * 0.24;
+    }
+  }
+
+  /* 成形后的一记阻尼余振：让 3.0s 的「静止」不是死图，且全程解析 */
+  function ringScale(t) {
+    if (t <= T_HOLD) return 1;
+    var d = t - T_HOLD;
+    if (d >= 0.5) return 1;
+    return 1 + 0.05 * Math.exp(-d * 9) * Math.sin(d * 21);
+  }
+
+  /* ---------- 核心：纯解析求位置，无任何跨帧状态 ---------- */
+  function evalAt(t) {
+    for (var k = 0; k <= K; k++) {
+      var tt = t - k * DT;
+      var off = k * N;
+      var s = ringScale(tt);
+      if (tt <= T_HOLD) {
+        for (var i = 0; i < N; i++) {
+          var u = easeOut(span(tt, D0[i], D1[i]));
+          var w = 1 - u;
+          var a = w * w, b = 2 * w * u, c = u * u;
+          var x = a * SX[i] + b * CXc[i] + c * TX[i];
+          var y = a * SY[i] + b * CYc[i] + c * TY[i];
+          PX[off + i] = CX0 + (x - CX0) * s;
+          PY[off + i] = CY0 + (y - CY0) * s;
+        }
+      } else {
+        for (var j = 0; j < N; j++) {
+          var u2 = easeOut(span(tt, E0[j], E1[j]));
+          var w2 = 1 - u2;
+          var a2 = w2 * w2, b2 = 2 * w2 * u2, c2 = u2 * u2;
+          var x2 = a2 * TX[j] + b2 * FX[j] + c2 * EX[j];
+          var y2 = a2 * TY[j] + b2 * FY[j] + c2 * EY[j];
+          PX[off + j] = CX0 + (x2 - CX0) * s;
+          PY[off + j] = CY0 + (y2 - CY0) * s;
+        }
+      }
+    }
+  }
+
+  /* ---------- 画布 ---------- */
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var dotEl = document.getElementById('dot');
+  var phEl = document.getElementById('ph');
+  var enEl = document.getElementById('en');
+  var fillEl = document.getElementById('fill');
+  var pctEl = document.getElementById('pct');
+
+  var NCOL = 5;
+  var COL = ['#5ce4d6', '#8fe79c', '#f6e36b', '#ffb04a', '#ff7b45'];
+  var RAD = [1.62, 1.90, 2.20, 2.52, 2.85];
+  var TRAIL_C = ['', '#ff8a3c', '#ff9e4e', '#ffb768', '#ffd08a'];
+  var TRAIL_A = [0, 0.30, 0.155, 0.072, 0.030];
+  var TRAIL_W = [0, 1.9, 1.5, 1.1, 0.8];
+  var PH = ['待机', '聚合中', '成形', '爆散', '完成'];
+  var PH_EN = ['STANDBY', 'ASSEMBLING', 'FORMED', 'DISPERSE', 'COMPLETE'];
+  var PH_COL = ['#4c6478', '#5ce4d6', '#9fe8d6', '#ff9a52', '#8fe79c'];
+
+  function drawGlow(t) {
+    var form = span(t, 0.9, 2.95);
+    var fl = Math.exp(-((t - 3.64) * (t - 3.64)) / (2 * 0.105 * 0.105));
+    var a = 0.085 * form + 0.34 * fl;
+    if (a <= 0.002) return;
+    var g = ctx.createRadialGradient(CX0, CY0, 0, CX0, CY0, 540);
+    g.addColorStop(0, 'rgba(96,206,255,' + a.toFixed(4) + ')');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawMark(t) {
+    var a = span(t, T_M0, T_M1);
+    if (a <= 0.001) return;
+    ctx.globalAlpha = a * 0.9;
+    ctx.fillStyle = '#eaf7ff';
+    ctx.font = FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(TEXT, CX0, MARK_BASE);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawParticles() {
+    var i, k, b, r, off;
+
+    // 拖尾：画相邻解析采样之间的线段。静止时线段退化为零长，自然消失。
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'butt';
+    for (k = K; k >= 1; k--) {
+      var o1 = k * N, o0 = (k - 1) * N;
+      ctx.globalAlpha = TRAIL_A[k];
+      ctx.strokeStyle = TRAIL_C[k];
+      ctx.lineWidth = TRAIL_W[k];
+      ctx.beginPath();
+      for (i = 0; i < N; i++) {
+        ctx.moveTo(PX[o1 + i], PY[o1 + i]);
+        ctx.lineTo(PX[o0 + i], PY[o0 + i]);
+      }
+      ctx.stroke();
+    }
+
+    // 速度 → 颜色分档（纯解析有限差分，无历史状态）
+    for (i = 0; i < N; i++) {
+      var vx = PX[i] - PX[N + i], vy = PY[i] - PY[N + i];
+      var sp = Math.sqrt(vx * vx + vy * vy) / DT;
+      b = (sp / 420) | 0;
+      BUCKET[i] = b > NCOL - 1 ? NCOL - 1 : b;
+    }
+
+    // 辉光晕
+    ctx.globalAlpha = 0.055;
+    ctx.fillStyle = '#bfe9ff';
+    ctx.beginPath();
+    for (i = 0; i < N; i++) {
+      r = RAD[BUCKET[i]] + 3.0;
+      ctx.moveTo(PX[i] + r, PY[i]);
+      ctx.arc(PX[i], PY[i], r, 0, TAU);
+    }
+    ctx.fill();
+
+    // 实心核，按速度分档上色
+    for (b = 0; b < NCOL; b++) {
+      ctx.globalAlpha = 0.74;
+      ctx.fillStyle = COL[b];
+      ctx.beginPath();
+      for (i = 0; i < N; i++) {
+        if (BUCKET[i] !== b) continue;
+        r = RAD[b];
+        ctx.moveTo(PX[i] + r, PY[i]);
+        ctx.arc(PX[i], PY[i], r, 0, TAU);
+      }
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawUI(t) {
+    // 单一真值来源：先算出唯一进度 prog，文案 / 进度条 / 百分比全部由它派生。
+    // prog 满格 ⟺ 文案是「完成」，两者不可能再各说各话。
+    var prog = clamp(t / T_END, 0, 1);
+    var pi = prog >= 1 ? 4 : prog >= P_BURST ? 3 : prog >= P_HOLD ? 2 : prog >= P_GO ? 1 : 0;
+    var pct = pi === 4 ? 100 : Math.round(prog * 100);
+    dotEl.style.color = PH_COL[pi];
+    phEl.textContent = PH[pi];
+    enEl.textContent = PH_EN[pi];
+    fillEl.style.width = (prog * 100).toFixed(3) + '%';
+    pctEl.textContent = pct + '%';
+  }
+
+  window.reelDraw = function (t) {
+    evalAt(t);
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+    drawGlow(t);
+    drawMark(t);
+    drawParticles();
+    drawUI(t);
+  };
+
+  init();
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>

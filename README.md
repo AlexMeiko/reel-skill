@@ -114,6 +114,7 @@ reel-out/cover-3x4.png         3:4 封面（如抖音，1080×1440）
 - `runtime/` — seek 与 kit（字幕、进度条注入）
 - `tools/` — capture / concat / mux / subs / panel
 - `examples/` — 契约样例，只抄结构不抄皮肤
+- `mechanics/` — 可 seek 的运动参考；机制拿去用，配色按题材定（合用就沿用）
 
 ## 不是什么
 

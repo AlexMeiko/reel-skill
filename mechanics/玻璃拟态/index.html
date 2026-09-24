@@ -1,0 +1,305 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 14 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：C 类 —— 机制依赖色相关系，换色时保留相应的通道关系即可，其余照换。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>玻璃拟态 · 主方案（真 backdrop-filter）</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #05070f; }
+  /* 宽高必须是第一条 .stage 规则里的前两条声明（verify 的静态检查取第一条 .stage 规则） */
+  .stage {
+    width: 1280px;
+    height: 720px;
+    position: relative;
+    overflow: hidden;
+    background: #070a18;
+    color: #eef4ff;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+
+  /* ---------- 0. 底色（不参与运镜，避免边缘露底） ---------- */
+  .base {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background:
+      radial-gradient(125% 95% at 18% 6%, #16205a 0%, rgba(10,14,36,0) 60%),
+      radial-gradient(105% 90% at 88% 96%, #2b103f 0%, rgba(10,14,36,0) 58%),
+      linear-gradient(158deg, #070b1c 0%, #0b1230 52%, #04060d 100%);
+  }
+
+  /* ---------- 1. 背景各层：全部超画 80px，运镜时不会露边 ---------- */
+  .layer { position: absolute; left: -80px; top: -80px; width: 1440px; height: 880px; }
+
+  .blob { position: absolute; left: 0; top: 0; border-radius: 50%; }
+
+  /* 环靶：13px 周期的 1px 细环 —— 卡片底下最容易被「模糊」证伪的高频图案 */
+  .rings {
+    background-image: repeating-radial-gradient(circle at 720px 440px,
+      rgba(255,255,255,.30) 0 1px, rgba(255,255,255,0) 1px 13px);
+  }
+  .rings2 {
+    background-image: repeating-radial-gradient(circle at 720px 440px,
+      rgba(150,225,255,.42) 0 2px, rgba(150,225,255,0) 2px 52px);
+  }
+  /* 7px 节距的点阵 */
+  .dots {
+    background-image: radial-gradient(rgba(255,255,255,.30) 1.5px, rgba(255,255,255,0) 1.6px);
+    background-size: 7px 7px;
+  }
+  /* 4px 周期的 45° 细斜线 */
+  .hatch {
+    background-image: repeating-linear-gradient(45deg,
+      rgba(255,255,255,.10) 0 1px, rgba(255,255,255,0) 1px 4px);
+  }
+
+  /* ---------- 2. 测试卡色带：滚动的高频主体，卡片整个压在它上面 ---------- */
+  .stripwrap {
+    position: absolute; left: -80px; top: 200px; width: 1440px; height: 340px;
+    overflow: hidden;
+    border-top: 1px solid rgba(255,255,255,.24);
+    border-bottom: 1px solid rgba(255,255,255,.24);
+  }
+  .strip { position: absolute; left: 0; top: 0; height: 338px; }
+  .bar {
+    position: absolute; top: 0; height: 338px;
+    border-right: 1px solid rgba(255,255,255,.70);
+    box-sizing: border-box;
+    opacity: .78;   /* 让底下的色斑透上来 —— 否则毛玻璃里只剩一块死灰 */
+  }
+  .bar i {
+    position: absolute; left: 5px; top: 14px; font-style: normal;
+    font-family: "Noto Sans Mono CJK SC", monospace; font-size: 10px; letter-spacing: .02em;
+  }
+  /* 横贯色带的 6px 细横纹：把「高频」再抬一档 */
+  .striplines {
+    position: absolute; left: 0; top: 0; width: 1440px; height: 338px;
+    background-image: repeating-linear-gradient(0deg,
+      rgba(255,255,255,.28) 0 1px, rgba(255,255,255,0) 1px 6px);
+  }
+
+  /* ---------- 3. 玻璃卡片：唯一主体 ---------- */
+  .card {
+    position: absolute; left: 330px; top: 210px;
+    width: 620px; height: 320px;
+    box-sizing: border-box;
+    border-radius: 26px;
+    background-color: rgba(12,18,40,.20);
+    background-image: linear-gradient(180deg, rgba(255,255,255,.20) 0%, rgba(255,255,255,.03) 46%, rgba(4,8,20,.26) 100%);
+    -webkit-backdrop-filter: blur(22px) saturate(1.7);
+    backdrop-filter: blur(22px) saturate(1.7);
+    border: 1px solid rgba(255,255,255,.36);
+    box-shadow: 0 24px 60px rgba(0,0,0,.42), inset 0 2px 0 rgba(255,255,255,.10);
+  }
+  /* 1px 内高光 */
+  .card::before {
+    content: "";
+    position: absolute; left: 20px; right: 20px; top: 0; height: 1px;
+    background: linear-gradient(90deg,
+      rgba(255,255,255,0), rgba(255,255,255,.92) 24%, rgba(255,255,255,.92) 76%, rgba(255,255,255,0));
+  }
+  /* 万一 backdrop-filter 不被支持：退成实底，保证文字可读（不允许灰底灰字） */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .card { background-image: none; background-color: rgba(10,16,38,.86); }
+  }
+
+  .card, .card .kicker, .card .title, .card .srow, .card .rlab {
+    text-shadow: 0 1px 7px rgba(0,0,0,.50);
+  }
+  .kicker {
+    position: absolute; left: 40px; top: 28px;
+    font-size: 17px; letter-spacing: .10em; color: rgba(230,240,255,.90);
+  }
+  .kicker i { font-style: normal; color: rgba(150,225,255,.60); padding: 0 7px; }
+  .title {
+    position: absolute; left: 40px; top: 54px;
+    font-size: 42px; line-height: 1.1; font-weight: 600; letter-spacing: .01em;
+    color: #ffffff;
+  }
+  .title em {
+    font-style: normal; font-size: 19px; font-weight: 500; letter-spacing: .03em;
+    color: #a8f2e6; padding-left: 14px;
+    font-family: "Noto Sans Mono CJK SC", monospace;
+  }
+  .srow {
+    position: absolute; left: 40px; right: 40px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    font-size: 18px; color: rgba(232,241,255,.92);
+  }
+  .r1 { top: 126px; }
+  .r2 { top: 156px; }
+  .srow b {
+    font-weight: 600; font-size: 21px; color: #ffffff;
+    font-family: "Noto Sans Mono CJK SC", monospace;
+  }
+  .rlab {
+    position: absolute; left: 40px; top: 194px;
+    font-size: 17px; letter-spacing: .08em; color: rgba(232,241,255,.86);
+  }
+  #read { position: absolute; left: 40px; top: 220px; width: 540px; height: 60px; display: block; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="base"></div>
+
+  <!-- 色斑层（最远，视差 0.30） -->
+  <div class="layer" id="layBlob">
+    <div class="blob" id="b0" style="width:780px;height:780px;
+      background: radial-gradient(closest-side, rgba(46,230,214,.50), rgba(46,230,214,.15) 52%, rgba(46,230,214,0) 100%);"></div>
+    <div class="blob" id="b1" style="width:720px;height:720px;
+      background: radial-gradient(closest-side, rgba(255,77,157,.46), rgba(255,77,157,.14) 52%, rgba(255,77,157,0) 100%);"></div>
+    <div class="blob" id="b2" style="width:860px;height:860px;
+      background: radial-gradient(closest-side, rgba(255,180,84,.38), rgba(255,180,84,.11) 52%, rgba(255,180,84,0) 100%);"></div>
+    <!-- 这两团刻意在卡片底下慢速游走：保证毛玻璃里始终有「颜色在流动」可看 -->
+    <div class="blob" id="b3" style="width:760px;height:760px;
+      background: radial-gradient(closest-side, rgba(64,226,255,.44), rgba(64,226,255,.12) 52%, rgba(64,226,255,0) 100%);"></div>
+    <div class="blob" id="b4" style="width:800px;height:800px;
+      background: radial-gradient(closest-side, rgba(232,84,180,.42), rgba(232,84,180,.11) 52%, rgba(232,84,180,0) 100%);"></div>
+  </div>
+
+  <!-- 高频图案层（中景，视差 0.65） -->
+  <div class="layer" id="layPat">
+    <div class="layer rings"  style="left:0;top:0;"></div>
+    <div class="layer rings2" style="left:0;top:0;"></div>
+    <div class="layer dots"   style="left:0;top:0;"></div>
+    <div class="layer hatch"  style="left:0;top:0;"></div>
+  </div>
+
+  <!-- 测试卡色带（最近，视差 1.0；自身再滚动） -->
+  <div class="stripwrap" id="layStrip">
+    <div class="strip" id="strip"></div>
+    <div class="striplines"></div>
+  </div>
+
+  <!-- 玻璃卡片（主体，不参与运镜） -->
+  <div class="card">
+    <div class="kicker">特效 11 <i>/</i> 玻璃拟态</div>
+    <div class="title">背景模糊<em>backdrop-filter</em></div>
+    <div class="srow r1"><span>模糊半径</span><b>22 px</b></div>
+    <div class="srow r2"><span>饱和度</span><b>1.7 ×</b></div>
+    <div class="rlab">背景位移</div>
+    <canvas id="read" width="1080" height="120"></canvas>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ============ 时间常量：全片只有这一组，所有派生量都相对它算 ============ */
+  var T_S0 = 0.45, T_S1 = 4.55;   // 测试卡滚动区间（起手静止 0.45s，收束后定格 0.45s）
+  var OFF_MAX = 448;              // 滚动总位移（px）—— 末帧的字面量终点
+  var PERIOD = 272;               // 测试卡重复周期 = 8 条 × 34px
+  var BAR_W = 34, N_BAR = 60;     // 60 条 = 2040px，覆盖 1440 视口 + 448 位移
+
+  /* ============ 色斑轨道：解析式，位置只由 t 决定，无累加器 ============
+     b3/b4 常驻卡片下方慢速游走 → 毛玻璃里始终有流动的颜色，不会是一块死灰。 */
+  var BLOBS = [
+    { el: "b0", cx: 300, cy: 200, rx: 170, ry: 72, w:  0.30, ph: 0.0, r: 390 },
+    { el: "b1", cx: 985, cy: 245, rx: 150, ry: 96, w: -0.24, ph: 1.7, r: 360 },
+    { el: "b2", cx: 620, cy: 560, rx: 230, ry: 62, w:  0.20, ph: 3.1, r: 430 },
+    { el: "b3", cx: 560, cy: 372, rx:  76, ry: 44, w:  0.26, ph: 0.6, r: 380 },
+    { el: "b4", cx: 760, cy: 400, rx:  88, ry: 52, w: -0.21, ph: 2.4, r: 400 }
+  ];
+
+  /* ============ 测试卡：高【亮度】对比、低【彩度】的 8 条一组 ============
+     模糊要看得见靠的是明暗硬边，不是彩虹；所以 4 条近黑 + 2 条冷白 + 2 条低饱和强调色。
+     整片主色 = 青 / 琥珀 / 品红（品红只出现在色斑里），加中性冷白作强调。 */
+  var BAR_FILL = ["#0b1026", "#cfe2f7", "#0b1026", "#17b0a2",
+                  "#0b1026", "#cfe2f7", "#0b1026", "#c9913f"];
+  var BAR_TAG  = ["DRK", "LGT", "DRK", "TEA", "DRK", "LGT", "DRK", "AMB"];
+
+  var $ = function (id) { return document.getElementById(id); };
+  var stripEl = $("strip"), cv = $("read"), ctx = cv.getContext("2d");
+  var layBlob = $("layBlob"), layPat = $("layPat"), layStrip = $("layStrip");
+  var blobEls = BLOBS.map(function (b) { return $(b.el); });
+
+  var MONO = '"Noto Sans Mono CJK SC", monospace';
+
+  /* 只在 load 时建一次，不进时间轴（用 DOM API 而非 innerHTML：本片没有任何每帧改文本的动作） */
+  function build() {
+    var i, c, dark, bar, tag;
+    for (i = 0; i < N_BAR; i++) {
+      c = i % 8; dark = (c % 2 === 0);
+      bar = document.createElement("div");
+      bar.className = "bar";
+      bar.style.left = (i * BAR_W) + "px";
+      bar.style.width = BAR_W + "px";
+      bar.style.background = BAR_FILL[c];
+      tag = document.createElement("i");
+      tag.textContent = BAR_TAG[c];
+      tag.style.color = dark ? "rgba(230,240,255,.66)" : "rgba(8,12,28,.78)";
+      bar.appendChild(tag);
+      stripEl.appendChild(bar);
+    }
+    stripEl.style.width = (N_BAR * BAR_W) + "px";
+  }
+
+  /* ============ 唯一的动画函数：画面 = f(t) ============ */
+  window.reelDraw = function (t) {
+    /* ---- 真值 1：滚动进度 e（0→1）。位移、仪表、条宽、状态文案全部出自它 ---- */
+    var e = reel.easeInOut(reel.span(t, T_S0, T_S1));
+    var off = OFF_MAX * e;
+
+    /* ---- 唯一相机：一个值，三层按景深共用（每层各写一套关键帧是失同步的根源） ---- */
+    var camX = reel.lerp(0, -26, e), camY = reel.lerp(0, 8, e);
+    layBlob.style.transform  = "translate(" + (camX * 0.30).toFixed(3) + "px," + (camY * 0.30).toFixed(3) + "px)";
+    layPat.style.transform   = "translate(" + (camX * 0.65).toFixed(3) + "px," + (camY * 0.65).toFixed(3) + "px)";
+    layStrip.style.transform = "translate(" + camX.toFixed(3) + "px," + camY.toFixed(3) + "px)";
+
+    /* ---- 测试卡滚动：取模，不是累加器；seek 到任意 t 都能直接算出来 ---- */
+    stripEl.style.transform = "translateX(" + (-(off % PERIOD)).toFixed(3) + "px)";
+
+    /* ---- 色斑：闭式椭圆轨道（t 从 0 就在流动，符合 SPEC「首帧背景在流动」） ---- */
+    for (var k = 0; k < BLOBS.length; k++) {
+      var b = BLOBS[k];
+      var x = b.cx + b.rx * Math.cos(b.w * t + b.ph);
+      var y = b.cy + b.ry * Math.sin(b.w * 1.27 * t + b.ph);
+      blobEls[k].style.transform =
+        "translate(" + (x - b.r).toFixed(2) + "px," + (y - b.r).toFixed(2) + "px)";
+    }
+
+    /* ---- 卡片读数：会变的文字一律画进 canvas（PATTERNS §6.1 的字形栅格化抖动坑） ---- */
+    var done = off >= OFF_MAX - 1e-6;
+    var phase = t < T_S0 ? "READY" : (done ? "SETTLED" : "SCROLL");
+    /* §6.2：未达成时不能显示终点值 —— 夹到 446.5，Math.round 后最多 447 */
+    var shown = done ? OFF_MAX : Math.min(off, OFF_MAX - 1.5);
+
+    ctx.clearRect(0, 0, 1080, 120);
+    ctx.textBaseline = "alphabetic";
+    /* 状态文案与读数共用同一基线（左：状态 · 右：位移），条在下 —— 三者同一个 off */
+    ctx.font = "600 26px " + MONO;
+    ctx.fillStyle = "rgba(232,241,255,.78)";
+    ctx.textAlign = "left";
+    ctx.fillText(phase, 0, 52);
+    ctx.font = "700 50px " + MONO;
+    ctx.fillStyle = "#a8f2e6";
+    ctx.textAlign = "right";
+    ctx.fillText(Math.round(shown) + " px", 1080, 52);
+    var w = 1080 * (shown / OFF_MAX);
+    ctx.fillStyle = "rgba(255,255,255,.22)";
+    ctx.fillRect(0, 96, 1080, 8);
+    ctx.fillStyle = "#a8f2e6";
+    ctx.fillRect(0, 96, w, 8);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(Math.max(0, w - 3), 86, 4, 28);
+    ctx.textAlign = "left";
+  };
+
+  function onLoad() {
+    build();
+    window.reelDraw(0);
+  }
+  if (document.readyState === "complete") onLoad();
+  else window.addEventListener("load", onLoad);
+})();
+</script>
+</body>
+</html>

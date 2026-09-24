@@ -1,0 +1,362 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 11 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：C 类 —— 机制依赖色相关系，换色时保留相应的通道关系即可，其余照换。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>故障文字 · 主方案（节拍表 + 24Hz 时间量子 + 克隆切片）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #05080c; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #0a0f16;
+    color: #f4f8fc;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+    /* 关掉 LCD 次像素抗锯齿：本机实测，每帧重排的小号等宽读数（#tc）在 LCD AA 下
+       抗锯齿覆盖率会随栅格化时机差 1/255，导致「同一 t 两次截帧」逐字节比对偶发失败。
+       灰度 AA 只取决于字形轮廓与位置，稳定。 */
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "Noto Sans Mono CJK SC", ui-monospace, monospace; }
+
+  /* ---- 静止层：底色 + 网格 + 边框，全部不参与时间轴 ---- */
+  .world { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  .bg {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background-image:
+      radial-gradient(760px 420px at 50% 42%, rgba(84,140,196,.14), rgba(0,0,0,0) 72%),
+      linear-gradient(to right, rgba(120,170,220,.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(120,170,220,.05) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+  }
+  .frame {
+    position: absolute; left: 28px; top: 28px; width: 1224px; height: 664px;
+    border: 1px solid rgba(140,185,230,.13); box-sizing: border-box;
+  }
+
+  .kicker {
+    position: absolute; left: 76px; top: 76px;
+    font-size: 18px; letter-spacing: .18em; color: #8ea0b8;
+  }
+  .kicker .tag {
+    display: inline-block; margin-right: 10px; padding: 2px 8px;
+    background: #ff2f4f; color: #0a0f16; font-weight: 700; letter-spacing: .06em;
+  }
+  .status {
+    position: absolute; right: 76px; top: 76px;
+    width: 260px; height: 22px;
+  }
+
+  /* ---- 故障组：1 个干净全幅副本 + 6 条裁切切片，全部由 reelDraw 写 ---- */
+  .band { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  .slice { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  .glyph {
+    position: absolute; left: 76px; top: 272px; width: 1128px; height: 148px;
+    display: flex; align-items: center; justify-content: center;
+    white-space: nowrap;
+    font-size: 120px; line-height: 148px; font-weight: 700; letter-spacing: .02em;
+  }
+  .gl-r { color: #ff2f4f; mix-blend-mode: screen; }
+  .gl-c { color: #00dfe8; mix-blend-mode: screen; }
+  .gl-w { color: #f4f8fc; }
+
+  .tear {
+    position: absolute; left: 76px; top: 340px; width: 1128px; height: 3px;
+    background: #e2f4ff; opacity: 0;
+  }
+
+  /* ---- 扫描线：静态纹理，只覆盖文字带，左右两端羽化掉，只有 opacity 随时间变 ---- */
+  .scan {
+    position: absolute; left: 76px; top: 294px; width: 1128px; height: 112px;
+    background-image: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,.38) 0 1px,
+      rgba(0,0,0,0) 1px 4px
+    );
+    -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,0) 0, #000 9%, #000 91%, rgba(0,0,0,0) 100%);
+    mask-image: linear-gradient(to right, rgba(0,0,0,0) 0, #000 9%, #000 91%, rgba(0,0,0,0) 100%);
+    opacity: .04;
+  }
+  .flash { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; background: #dff3ff; opacity: 0; }
+
+  /* ---- 仪表：发条尺（节拍表的可视化）+ 读数 ---- */
+  .hairline { position: absolute; left: 76px; top: 512px; width: 1128px; height: 1px; background: rgba(150,190,230,.20); }
+  .ruler { position: absolute; left: 76px; top: 546px; width: 1128px; height: 26px; }
+  .track { position: absolute; left: 0; top: 12px; width: 1128px; height: 1px; background: rgba(150,190,230,.20); }
+  .tick { position: absolute; width: 2px; height: 12px; top: 7px; background: rgba(150,190,230,.42); }
+  .ph { position: absolute; top: 0; width: 2px; height: 26px; background: #00dfe8; box-shadow: 0 0 10px rgba(0,223,232,.55); }
+  .labels {
+    position: absolute; left: 76px; top: 582px; width: 1128px; height: 22px;
+    font-size: 15px; letter-spacing: .10em; color: #74879f;
+  }
+  /* 左边的说明是中文字面量、位置固定，留在 DOM；中间/右边的读数每帧改字，
+     改画进 canvas —— DOM 文本每帧换字会踩到 Chromium 字形缓存栅格化的
+     1/255 抖动，同一 t 两次截帧就不再逐字节一致（见 README「踩坑记录」第 1 条）。 */
+  .labels .l { position: absolute; left: 0; top: 0; }
+  #readout { position: absolute; left: 0; top: 0; width: 1128px; height: 22px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="world" id="world">
+    <div class="bg"></div>
+    <div class="frame"></div>
+
+    <div class="kicker"><span class="tag">06</span>故障文字</div>
+    <canvas class="status" id="status" width="260" height="22"></canvas>
+
+    <div class="band" id="band">
+      <div class="slice" id="base">
+        <div class="glyph gl-r">画面只是时间的函数</div>
+        <div class="glyph gl-c">画面只是时间的函数</div>
+        <div class="glyph gl-w">画面只是时间的函数</div>
+      </div>
+      <div class="tear" id="tear"></div>
+    </div>
+
+    <div class="scan" id="scan"></div>
+    <div class="flash" id="flash"></div>
+
+    <div class="hairline"></div>
+    <div class="ruler" id="ruler"><div class="track"></div></div>
+    <div class="labels">
+      <span class="l">节拍表驱动 · 非均匀发作间隔</span>
+      <canvas id="readout" width="1128" height="22"></canvas>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  /* =====================================================================
+     故障 = f(t)。没有随机数、没有定时器、没有墙钟。
+     「随机感」全部来自 hash(i) 的确定性伪随机 + q = floor(t*24) 的时间量子。
+     ===================================================================== */
+  var NS = 6;                       // 切片条数（SPEC: 4–6）
+  var QHZ = 24;                     // 时间量子频率：每秒换 24 次（≠ 30fps，不会退化成逐帧噪声）
+  var SPLIT = 26;                   // 通道分离最大位移 px
+  var STAGE_H = 720;
+
+  /* 发作节拍表 —— 字面量，不是随机数。
+     0.62 / 1.42 / 2.92 / 3.55 是单发；2.02+2.14 是一对密集双发；4.22 是收尾大发作。
+     间隔 0.80 / 0.60 / (0.12) / 0.78 / 0.63 / 0.67 —— 刻意不等距，听得出节奏。
+     发作之间的干净静止段 ≥ 0.30s，肉眼一定能看出「恢复了」。 */
+  var BEATS = [
+    { t: 0.62, w: 0.34, a: 0.45 },
+    { t: 1.42, w: 0.30, a: 0.62 },
+    { t: 2.02, w: 0.26, a: 0.78 },
+    { t: 2.14, w: 0.30, a: 0.92 },
+    { t: 2.92, w: 0.36, a: 0.55 },
+    { t: 3.55, w: 0.26, a: 0.68 },
+    { t: 4.22, w: 0.46, a: 1.00 }
+  ];
+
+  function hash(i) {                 // 确定性伪随机：同一 i 永远同一结果
+    var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123;
+    return x - Math.floor(x);
+  }
+  function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
+
+  /* 发作包络：瞬时起振（0.02s＝一帧内到位）→ 平台 → 二次衰减。
+     用平台而不是三角尖，是因为「起振到位的宽度」要等于节拍表里写的 w，
+     否则 w 只是数学窗口、可见时长只有它的三分之一，播放时会一闪而过。
+     瞬时起振还有个副作用是好的：切片组的开关切换发生在振幅已经足够大的那一帧，
+     看不到干净壳与切片组之间的拼接缝。 */
+  function pulse(t, b) {
+    var d = t - b.t;
+    if (d < 0 || d > b.w) return 0;
+    var atk = 0.02, hold = b.w * 0.5;
+    if (d <= atk) return b.a * (d / atk);
+    if (d <= hold) return b.a;
+    var u = (d - hold) / (b.w - hold);
+    return b.a * (1 - u) * (1 - u);
+  }
+  /* 包络：一串发作叠加后的总强度。它是「这一段要不要故障」的开关。 */
+  function envAt(t) {
+    var s = 0;
+    for (var i = 0; i < BEATS.length; i++) s += pulse(t, BEATS[i]);
+    return Math.min(1.15, s);
+  }
+  /* 闸门：把连续包络切成 24Hz 的通断。真实的故障不是一条平滑的钟形，
+     而是一串「咔咔咔」的断续 —— 包络负责「这一秒在发作」，闸门负责「这一秒里抖几下」。
+     它只依赖时间量子 q，所以照样是 t 的纯函数。 */
+  function gateAt(q) { return hash(q * 8.3 + 2.7) > 0.42 ? 1 : 0.34; }
+
+  var worldEl = document.getElementById("world");
+  var bandEl = document.getElementById("band");
+  var baseEl = document.getElementById("base");
+  var tearEl = document.getElementById("tear");
+  var scanEl = document.getElementById("scan");
+  var flashEl = document.getElementById("flash");
+  var statusEl = document.getElementById("status");
+  var statusCtx = statusEl.getContext("2d");
+  var rulerEl = document.getElementById("ruler");
+  var phEl = document.createElement("div");
+  var readEl = document.getElementById("readout");
+  var readCtx = readEl.getContext("2d");
+
+  var MONO = '"Noto Sans Mono CJK SC", ui-monospace, monospace';
+  /* 每帧改字的读数走 canvas 文本：画布每次整块重绘，不依赖字形缓存，
+     不受合成层栅格化时机影响，同一 t 必然逐字节一致。 */
+  function setStatus(text, color) {
+    statusCtx.clearRect(0, 0, 260, 22);
+    statusCtx.font = "700 16px " + MONO;
+    if ("letterSpacing" in statusCtx) statusCtx.letterSpacing = "2.6px";
+    statusCtx.textAlign = "right";
+    statusCtx.textBaseline = "middle";
+    statusCtx.fillStyle = color;
+    statusCtx.fillText(text, 260, 12);
+  }
+  function setReadout(tc, bc) {
+    readCtx.clearRect(0, 0, 1128, 22);
+    readCtx.font = "15px " + MONO;
+    if ("letterSpacing" in readCtx) readCtx.letterSpacing = "1.5px";
+    readCtx.textBaseline = "middle";
+    readCtx.fillStyle = "#74879f";
+    readCtx.textAlign = "left";
+    readCtx.fillText(tc, 537, 12);
+    readCtx.textAlign = "right";
+    readCtx.fillText(bc, 1128, 12);
+  }
+
+  /* ---- 切片带：只量一次（load 时的静态几何，不参与时间轴） ---- */
+  var BANDS = [];
+  var INK = { left: 76, width: 1128 };
+  (function measure() {
+    var bt = 272, bb = 420;
+    try {
+      var wEl = baseEl.querySelector(".gl-w");
+      var rng = document.createRange();
+      rng.selectNodeContents(wEl);
+      var rr = rng.getBoundingClientRect();
+      var sr = document.querySelector(".stage").getBoundingClientRect();
+      var top = rr.top - sr.top + 12, bot = rr.bottom - sr.top - 12;
+      if (bot - top > 60) { bt = Math.max(272, Math.round(top)); bb = Math.min(420, Math.round(bot)); }
+      if (rr.width > 300) INK = { left: Math.round(rr.left - sr.left), width: Math.round(rr.width) };
+    } catch (e) {}
+    for (var k = 0; k < NS; k++) {
+      BANDS.push([Math.round(bt + (bb - bt) * k / NS), Math.round(bt + (bb - bt) * (k + 1) / NS)]);
+    }
+    /* 撕裂线只在字身范围内出现 —— 它属于字形，不做成横贯画面的分割线 */
+    tearEl.style.left = INK.left + "px";
+    tearEl.style.width = INK.width + "px";
+  })();
+
+  /* ---- 克隆 6 条切片：每条都是同一份文字的全幅副本，靠 clip-path 取一条横带 ---- */
+  var SLICES = [];
+  (function build() {
+    var inner = baseEl.innerHTML;
+    SLICES.push({ el: baseEl, r: baseEl.querySelector(".gl-r"), c: baseEl.querySelector(".gl-c"), w: baseEl.querySelector(".gl-w") });
+    for (var k = 1; k < NS; k++) {
+      var s = document.createElement("div");
+      s.className = "slice";
+      s.innerHTML = inner;
+      s.style.opacity = "0";
+      bandEl.insertBefore(s, tearEl);
+      SLICES.push({ el: s, r: s.querySelector(".gl-r"), c: s.querySelector(".gl-c"), w: s.querySelector(".gl-w") });
+    }
+    /* 发条尺刻度：位置就是节拍表的字面量，一个字节都不另算 */
+    for (var i = 0; i < BEATS.length; i++) {
+      var d = document.createElement("div");
+      d.className = "tick mono";
+      d.style.left = (1128 * BEATS[i].t / window.REEL.duration).toFixed(2) + "px";
+      rulerEl.appendChild(d);
+    }
+    rulerEl.appendChild(phEl);
+    phEl.className = "ph";
+  })();
+  var TICKS = [].slice.call(rulerEl.querySelectorAll(".tick"));
+
+  window.reelDraw = function (t) {
+    var q = Math.floor(t * QHZ);                       // 时间量子：故障的「随机感」从这里来
+    var ENV = envAt(t);                                // 包络：这一段在不在发作
+    var A = ENV * gateAt(q);                           // 闸门：发作期里 24Hz 的通断
+    var big = clamp((ENV - 0.62) / 0.38, 0, 1);        // 只有收尾大发作会点亮撕裂线/闪光
+    var active = ENV > 0.02;                           // 干净壳 ↔ 切片组 的独占开关
+    var i, k, s;
+
+    /* 通道分离：红 / 青各自独立的 hash 通道（换常数 = 换一条随机通道） */
+    var dxR = A * (hash(q * 1.7) - 0.5) * SPLIT;
+    var dxC = A * (hash(q * 2.9 + 1.3) - 0.5) * SPLIT;
+    var dyR = A * (hash(q * 3.7 + 5.1) - 0.5) * 5;
+    var dyC = A * (hash(q * 5.3 + 9.7) - 0.5) * 5;
+
+    /* 整幅画面抖动：衰减正弦的闭式写法（没有上一帧状态）。
+       干净期一律写 "none"，不要写 translate(0px,0px) —— 只要 transform 存在，
+       .world 就会被提升成合成层，层内文字会重新栅格化，抗锯齿边缘偶尔差 1/255，
+       同 t 两次截帧就不再逐字节一致（实测踩到的坑，见 README）。 */
+    worldEl.style.transform = A > 0.001
+      ? "translate(" + (A * 3.4 * Math.sin(t * 71.0)).toFixed(2) + "px," +
+                       (A * 1.7 * Math.sin(t * 53.0 + 1.7)).toFixed(2) + "px)"
+      : "none";
+
+    for (k = 0; k < SLICES.length; k++) {
+      s = SLICES[k];
+      if (k === 0) {
+        /* 第 0 条没被裁切，负责 t=0 那张干净壳 */
+        s.el.style.clipPath = "none";
+        s.el.style.transform = "none";
+        s.el.style.opacity = active ? "0" : "1";
+        s.r.style.transform = active ? "translate(" + dxR.toFixed(2) + "px," + dyR.toFixed(2) + "px)" : "none";
+        s.c.style.transform = active ? "translate(" + dxC.toFixed(2) + "px," + dyC.toFixed(2) + "px)" : "none";
+        s.w.style.transform = "none";
+        continue;
+      }
+      var b = BANDS[k - 1];
+      var sx = A * (hash(k * 7.3 + q * 1.9) - 0.5) * 56;          // 这条横带的横向错位
+      var sy = A * (hash(k * 3.1 + q * 0.7 + 4.4) - 0.5) * 6.4;    // 轻微纵向撕开
+      var mR = 1 + 1.2 * hash(k * 17.3 + q * 4.1);                 // 每条带的色差强度不同
+      var mC = 1 + 1.2 * hash(k * 23.9 + q * 6.7);
+      var drop = A * (hash(k * 13.1 + q * 2.3 + 8.8) > 0.76 ? 1 : 0);  // 偶发信号丢失
+
+      s.el.style.clipPath = "inset(" + b[0] + "px 0 " + (STAGE_H - b[1]) + "px 0)";
+      s.el.style.transform = active ? "translate(" + sx.toFixed(2) + "px," + sy.toFixed(2) + "px)" : "none";
+      s.el.style.opacity = active ? (1 - 0.72 * drop).toFixed(3) : "0";
+      s.r.style.transform = active ? "translate(" + (dxR * mR).toFixed(2) + "px," + (dyR * mR).toFixed(2) + "px)" : "none";
+      s.c.style.transform = active ? "translate(" + (dxC * mC).toFixed(2) + "px," + (dyC * mC).toFixed(2) + "px)" : "none";
+      s.w.style.transform = "none";
+    }
+
+    /* 撕裂亮线：只在最大那一次发作里出现，且只落在字身范围内 */
+    tearEl.style.top = (306 + 88 * hash(q * 6.4 + 1.9)).toFixed(0) + "px";
+    tearEl.style.transform = "translateX(" + (A * (hash(q * 9.1 + 2.2) - 0.5) * 70).toFixed(2) + "px)";
+    tearEl.style.opacity = (big * 0.72).toFixed(3);
+
+    scanEl.style.opacity = (0.04 + A * 0.22).toFixed(3);
+    flashEl.style.opacity = (big * 0.09).toFixed(3);
+
+    /* 仪表读数：和上面的 A / q 同一次插值里派生，不存在第二条时间线 */
+    var beatIdx = 0;
+    for (i = 0; i < BEATS.length; i++) if (t >= BEATS[i].t) beatIdx = i + 1;
+    for (i = 0; i < TICKS.length; i++) {
+      var bk = BEATS[i];
+      var hot = (t >= bk.t && t <= bk.t + bk.w) ? 1 : 0;
+      var passed = t >= bk.t ? 1 : 0;
+      TICKS[i].style.top = (hot ? 1 : 7) + "px";
+      TICKS[i].style.height = (hot ? 24 : 12) + "px";
+      TICKS[i].style.background = hot ? "#ff2f4f" : (passed ? "#cfe4f5" : "rgba(150,190,230,.42)");
+    }
+    phEl.style.left = (1128 * t / window.REEL.duration).toFixed(2) + "px";
+    /* 状态与游标色看包络（ENV）而不是闸门后的 A：否则读数会在 24Hz 上疯狂闪，
+       那是噪声不是信息。扫描线才跟着 A 抖，因为它本来就是「信号强度」本身。 */
+    phEl.style.background = ENV >= 0.5 ? "#ff2f4f" : "#00dfe8";
+    phEl.style.boxShadow = ENV >= 0.5 ? "0 0 10px rgba(255,47,79,.6)" : "0 0 10px rgba(0,223,232,.55)";
+
+    setReadout("T+" + t.toFixed(2), "发作 " + beatIdx + " / " + BEATS.length);
+    setStatus(ENV >= 0.5 ? "SIGNAL LOST" : "SIGNAL OK", ENV >= 0.5 ? "#ff2f4f" : "#00dfe8");
+  };
+
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>

@@ -48,7 +48,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
    ls <技能目录>/tools/
    ```
    出片用 `capture.mjs` / `concat.mjs` / `subs.mjs` / `mux.mjs`。不要假设一定有搜索或 TTS 脚本。
-2. 读 [prompt/generation.md](prompt/generation.md)。风格按题材选，写进 knowledge.md，不要抄 examples 的配色。**有口播就还不能画。**
+2. 读 [prompt/generation.md](prompt/generation.md)。风格按题材选、写进 knowledge.md；配色由你定（examples / mechanics 里的都只是各自的一套搭配，合用就沿用）。**有口播就还不能画。**
 3. 调研：先摸清主题有哪些维度、有没有可用数据/口径、大概能讲什么。结论写进 `knowledge.md` 顶部（短）。
 4. 分点：按调研结果列大纲，定分段与承接，写进 `knowledge.md`。
 5. 按分点搜资料。`knowledge.md` 只当短索引；每个分点的资料写 `knowledge/01-*.md`。搜索可用子代理（若可用）：一个分点一个任务，资料由子代理直接落文件，只回传结论和路径，不要囤 SERP。下一段先读索引 + 本段用到的分点文件。
@@ -61,7 +61,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
    - 字幕用 `subs.mjs` 生成该段 `part-NN.srt`，且必须早于该段 MP4。不要写进 HTML，不要 libass 另烧一套字。没有该段 srt 时不要拿全片 `captions.srt` 充数（时基不同，后段会显示前段台词）。
    - 时长不限。拆不拆段、在哪拆由你定（写进 knowledge.md）。
 9. 时间轴定了再写 `part-01.html`（单段可叫 `scene.html`）。数字用字面量数组。后段抄 knowledge 的皮和上一段结束态。认输入用完整文件名，不要把 draft、备份扫进正片，并回显读到了哪些文件。
-10. 先探针再全量：`capture.mjs part-01.html --probe --qa-dir part-01-probe`，读图 + `probe.json`。只看某一秒用 `--at 20.5`。
+10. 先探针再全量：`capture.mjs "$PWD/reel-out/part-01.html" --probe --qa-dir "$PWD/reel-out/part-01-probe"`，读图 + `probe.json`。只看某一秒用 `--at 20.5`，抽帧也写进 `reel-out/`。
 11. 全量导出，单段也打满核：`--jobs $(nproc)`。`--jobs` 就是并行窗口数，不要超过核数。默认每个浏览器 4 个窗口（8 核就是 2 个浏览器 / 8 个窗口）。导出后读 `qa-*.png` + `qa.json`。这一段画面不对，只改这一段再导，最多 3 轮。总时长、章节、字幕或 `gbar.json` 变了，烧进画面的段都要重导。画面互不依赖、且这些全局量已定的段可以同时导出。
 12. 多段 concat，再 `mux.mjs` 混音（不要 `--burn`）。配音在这一步收成单声道，并归一到 -18.7 LUFS、真峰值 -1.5 dBTP。不要把单声道复制成左右声道后再交付。真立体声才加 `--keep-stereo`。
 13. 成片抽帧终检（不可省，含各段衔接点）：接缝、gbar 是否连续、字幕、末帧。
@@ -80,9 +80,13 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 3. 运动只能来自 CSS/WAAPI（`fill: both`，禁 `infinite`）、`reelDraw(t)`、`reelSeek(t)`。口播走 srt；进度条走 `gbar.json` + `REEL.offset`（要么不用），不要手画，不要 `REEL.chapters`。
 4. 禁 `Date.now()` / `performance.now()` / 无时钟 rAF。rAF 只读 `window.__reelTime`。
 5. 系统字体；不要外链字体 / `<video>` / 随机数当主运动。
-6. 不要把技能目录、`scratch/`、`examples/` 当输出路径。
+6. 不要把技能目录（含 `examples/`、`mechanics/`）、`scratch/` 当输出路径。产物写 `$PWD/reel-out/`。
 
 样例只抄契约：[examples/contract.html](examples/contract.html)。不要抄它的样子。
+
+**某种运动不知道怎么写才 seekable**：[mechanics/INDEX.md](mechanics/INDEX.md) 有 19 个可精确 seek 的特效参考实现。
+机制直接拿去用；**配色按题材由你定** —— 合用就沿用，不合用再换，机制不受影响。
+不确定某个写法会不会坏，先看 `mechanics/_shared/anti-patterns/`。出片仍走上面的闭环，不要按 mechanics 里的旧 README 导出。
 
 ## 抽帧怎么判
 
@@ -105,6 +109,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 ## 路由
 
 - 默认本技能；流程/架构讲解做成会动的片。
+- 某种运动不知道怎么写才 seekable → [mechanics/INDEX.md](mechanics/INDEX.md)；不确定写法会不会坏先看 `mechanics/_shared/anti-patterns/`。
 - 只要一张静态流程图/架构图：不要用本技能出 MP4。
 - 数学证明逐步变换：Manim。
 - 写实 / 人物 / 电影感：拒绝。

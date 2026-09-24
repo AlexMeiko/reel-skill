@@ -1,0 +1,451 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 16 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>特效 13 · 马赛克揭示 —— 主方案（canvas 平均色金字塔 + hash(块坐标) 逐块收敛）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #05070c; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #05070c;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  .stage canvas { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; display: block; }
+</style>
+</head>
+<body>
+<div class="stage"><canvas id="view" width="1280" height="720"></canvas></div>
+<script>
+(function () {
+  "use strict";
+
+  /* =====================================================================
+     特效 13 · 马赛克揭示（主方案）
+     画面 = f(t)，没有任何跨帧状态：
+       · 源图（程序化生成，禁外链）在首次 reelDraw 时画一次，缓存；
+       · 平均色金字塔 pyr[0..6] 在同一时刻建成并缓存，运行时只查表；
+       · 每块 (cx,cy) 的「清晰时刻」= T0 + SPREAD * U[cx,cy]，
+         其中 U 只由 hash(块坐标) 决定 —— 与帧号、与到达 history 无关。
+     ===================================================================== */
+
+  /* ---------------- 几何 / 时间：全部字面量 ---------------- */
+  var W = 1280, H = 720;                          // 成片尺寸
+  var SW = 1280, SH = 768, CROP = 24;             // 源图 1280×768，上下各裁 24px 露出 720
+  var CELL = 64, MAXLV = 6;                       // 基本块 64px，阶梯 64→32→16→8→4→2→1
+  var NC = SW / CELL, NR = SH / CELL;             // 20 × 12
+  var NCELL = NC * NR;                            // 240
+
+  var T0 = 0.26;         // 揭示开始（之前是全糊静置壳）
+  var DUR = 0.54;        // 单个块走完 6 级阶梯的时间
+  var T_REVEAL = 3.30;   // 最后一个块降到 1px（返工：揭示前沿从 1.78 拉长到 3.30）
+  var T_CLEAR = 3.32;    // 全幅清晰（留 20ms 余量避开浮点边界）
+  var SPREAD = T_REVEAL - T0 - DUR;               // 块间错峰跨度 = 2.50（原 0.98）
+  var T_POP0 = T_CLEAR, T_POP1 = T_CLEAR + 0.22;  // 清晰后的一次轻微过冲（0.60 → 0.22）
+  var T_PUSH0 = T_CLEAR, T_PUSH1 = 4.83;          // 推近 3.32 → 4.83，1.00 → 1.16
+  var T_END = 4.93;                               // 仪表终点（末帧 t = 149/30 = 4.9667）
+
+  /* ---------------- 确定性伪随机（PATTERNS §1.2） ---------------- */
+  function hash(i) {
+    var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123;
+    return x - Math.floor(x);
+  }
+  function hash2(i, j) { return hash(i * 127.1 + j * 311.7 + 74.7); }
+  function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
+
+  /* 值噪声 + fBm：块坐标 -> 成片的团块（仍然是纯 hash 函数） */
+  function vnoise(x, y) {
+    var xi = Math.floor(x), yi = Math.floor(y);
+    var xf = x - xi, yf = y - yi;
+    var u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    var a = hash2(xi, yi), b = hash2(xi + 1, yi);
+    var c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+    return (a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v;
+  }
+  function fbm(x, y) {
+    return 0.55 * vnoise(x * 0.22, y * 0.22) +
+           0.30 * vnoise(x * 0.50, y * 0.50) +
+           0.15 * vnoise(x * 1.05, y * 1.05);
+  }
+
+  /* ---------------- 每块的 u（清晰次序）——只算一次，缓存 ---------------- */
+  var U = new Float32Array(NCELL);
+  function buildU() {
+    var mn = Infinity, mx = -Infinity, i, cx, cy, r;
+    for (cy = 0; cy < NR; cy++) {
+      for (cx = 0; cx < NC; cx++) {
+        var front = 0.58 * (cx / (NC - 1)) + 0.42 * (cy / (NR - 1)); // 左上 -> 右下
+        r = 0.60 * front + 0.40 * fbm(cx, cy);
+        U[cy * NC + cx] = r;
+        if (r < mn) mn = r;
+        if (r > mx) mx = r;
+      }
+    }
+    for (i = 0; i < NCELL; i++) U[i] = (U[i] - mn) / (mx - mn); // 归一化到 [0,1]
+  }
+
+  /* ---------------- 源图：程序化黄昏湖景（禁外链资源） ---------------- */
+  var src = null;
+  function buildSource() {
+    var c = document.createElement("canvas");
+    c.width = SW; c.height = SH;
+    var g = c.getContext("2d");
+    var i, k;
+
+    /* 天空 */
+    var sky = g.createLinearGradient(0, 0, 0, 454);
+    sky.addColorStop(0.00, "#0c1433");
+    sky.addColorStop(0.30, "#262a5c");
+    sky.addColorStop(0.58, "#6a4676");
+    sky.addColorStop(0.80, "#c4694c");
+    sky.addColorStop(1.00, "#f0b169");
+    g.fillStyle = sky; g.fillRect(0, 0, SW, 454);
+
+    /* 星点：只在暗部，粗块时会被平均掉 —— 揭示后期才「长出来」 */
+    for (i = 0; i < 130; i++) {
+      var stx = hash(i * 3.1 + 1.7) * SW;
+      var sty = hash(i * 7.7 + 13.3) * 252;
+      var sr = 0.6 + 1.25 * hash(i * 11.3 + 5.1);
+      var sa = (0.22 + 0.58 * hash(i * 5.5 + 2.2)) * (1 - sty / 252) * 0.92 + 0.05;
+      g.beginPath(); g.arc(stx, sty, sr, 0, 6.2832);
+      g.fillStyle = "rgba(226,236,255," + sa.toFixed(3) + ")";
+      g.fill();
+    }
+
+    /* 云带 */
+    for (k = 0; k < 7; k++) {
+      var cly = 120 + k * 44 + hash(k * 2.3 + 0.7) * 26;
+      var clw = 150 + hash(k * 4.1 + 9.1) * 330;
+      var clh = 5 + hash(k * 6.7 + 3.3) * 9;
+      var clx = 120 + hash(k * 8.9 + 1.1) * 1040;
+      var warm = clamp((cly - 120) / 300, 0, 1);
+      g.beginPath(); g.ellipse(clx, cly, clw, clh, 0, 0, 6.2832);
+      g.fillStyle = "rgba(" + Math.round(118 + 126 * warm) + "," +
+                              Math.round(94 + 62 * warm) + "," +
+                              Math.round(122 - 22 * warm) + "," +
+                              (0.10 + 0.17 * warm).toFixed(3) + ")";
+      g.fill();
+    }
+
+    /* 落日 */
+    var SX = 862, SY = 416;
+    var glow = g.createRadialGradient(SX, SY, 6, SX, SY, 280);
+    glow.addColorStop(0.00, "rgba(255,208,146,0.58)");
+    glow.addColorStop(0.45, "rgba(255,168,96,0.21)");
+    glow.addColorStop(1.00, "rgba(255,150,80,0)");
+    g.fillStyle = glow; g.fillRect(SX - 290, SY - 290, 580, 580);
+    var disc = g.createRadialGradient(SX - 9, SY - 11, 2, SX, SY, 64);
+    disc.addColorStop(0.00, "#fff8e4");
+    disc.addColorStop(0.52, "#ffd88f");
+    disc.addColorStop(1.00, "#f7a04c");
+    g.beginPath(); g.arc(SX, SY, 64, 0, 6.2832); g.fillStyle = disc; g.fill();
+
+    /* 地平线雾 */
+    var haze = g.createLinearGradient(0, 356, 0, 454);
+    haze.addColorStop(0, "rgba(240,177,105,0)");
+    haze.addColorStop(1, "rgba(244,186,116,0.62)");
+    g.fillStyle = haze; g.fillRect(0, 356, SW, 98);
+
+    /* 两道山脊 */
+    function ridge(baseY, amp, n, color, phase) {
+      g.beginPath();
+      g.moveTo(-12, baseY + 70);
+      for (var j = 0; j <= n; j++) {
+        var x = -12 + (SW + 24) * j / n;
+        var hh = amp * (0.32 + 0.68 * hash(j * 3.7 + phase));
+        var y = baseY - hh;
+        if (j === 0) g.lineTo(x, y);
+        else {
+          var px = -12 + (SW + 24) * (j - 1) / n;
+          g.quadraticCurveTo((px + x) / 2, y - amp * 0.30 * (hash(j * 5.1 + phase) - 0.35), x, y);
+        }
+      }
+      g.lineTo(SW + 12, baseY + 70);
+      g.closePath();
+      g.fillStyle = color; g.fill();
+    }
+    ridge(454, 122, 11, "rgba(108,94,142,0.92)", 3.1);
+    ridge(454, 76, 9, "rgba(40,34,70,0.98)", 17.3);
+
+    /* 湖面 */
+    var wat = g.createLinearGradient(0, 454, 0, SH);
+    wat.addColorStop(0.00, "#3c4177");
+    wat.addColorStop(0.34, "#222a52");
+    wat.addColorStop(1.00, "#0b1122");
+    g.fillStyle = wat; g.fillRect(0, 454, SW, SH - 454);
+
+    /* 落日在湖面的倒影：软晕 + 越远越宽越散越淡的粼光短线 */
+    var col = g.createRadialGradient(0, 0, 8, 0, 0, 150);
+    col.addColorStop(0.00, "rgba(255,192,124,0.30)");
+    col.addColorStop(0.45, "rgba(255,178,108,0.13)");
+    col.addColorStop(1.00, "rgba(255,170,100,0)");
+    g.save();
+    g.translate(SX, 486); g.scale(1, 1.95);
+    g.fillStyle = col; g.fillRect(-160, -160, 320, 320);
+    g.restore();
+
+    g.lineCap = "round";
+    for (k = 0; k < 62; k++) {
+      var ru = k / 62;
+      var yy = 458 + Math.pow(ru, 0.82) * 234;
+      var spread = 16 + 104 * ru;
+      var xx = SX + (hash(k * 9.1 + 2.2) - 0.5) * 2 * spread;
+      var hw = (9 + 48 * hash(k * 3.3 + 4.4)) * (0.5 + 0.95 * (1 - ru));
+      var aa = 0.34 * Math.pow(1 - ru, 1.35);
+      g.strokeStyle = "rgba(255,216,164," + aa.toFixed(3) + ")";
+      g.lineWidth = 1.5 + 1.9 * ru;
+      g.beginPath(); g.moveTo(xx - hw, yy); g.lineTo(xx + hw, yy); g.stroke();
+    }
+    for (k = 0; k < 14; k++) {
+      var cu = k / 14;
+      var cyy = 459 + Math.pow(cu, 0.85) * 150;
+      var chw = 26 * (1 - cu * 0.7);
+      g.strokeStyle = "rgba(255,236,196," + (0.40 * Math.pow(1 - cu, 1.2)).toFixed(3) + ")";
+      g.lineWidth = 2.4;
+      g.beginPath(); g.moveTo(SX - chw, cyy); g.lineTo(SX + chw, cyy); g.stroke();
+    }
+    g.lineCap = "butt";
+
+    /* 细波纹 */
+    for (k = 0; k < 30; k++) {
+      var wy = 464 + k * 10.2;
+      var wx = hash(k * 2.7 + 1.3) * 900;
+      var wl = 120 + hash(k * 5.9 + 7.7) * 640;
+      g.fillStyle = "rgba(198,216,255," + (0.05 + 0.10 * hash(k * 4.3 + 3.9)).toFixed(3) + ")";
+      g.fillRect(wx, wy, wl, 1.4);
+    }
+
+    /* 前景岸 + 松树 */
+    g.beginPath();
+    g.moveTo(-12, SH + 12);
+    g.lineTo(-12, 636);
+    g.bezierCurveTo(170, 590, 330, 616, 505, 690);
+    g.lineTo(505, SH + 12);
+    g.closePath();
+    g.fillStyle = "#070c18"; g.fill();
+
+    function pine(x, baseY, h, w) {
+      g.fillStyle = "#050a14";
+      g.fillRect(x - 2.4, baseY - 12, 4.8, 14);
+      for (var t = 0; t < 4; t++) {
+        var uu = t / 4;
+        var tw = w * (1 - uu * 0.56);
+        var yb = baseY - h * uu * 0.60;
+        var yt = yb - h * 0.44;
+        g.beginPath();
+        g.moveTo(x, yt);
+        g.lineTo(x - tw / 2, yb);
+        g.lineTo(x + tw / 2, yb);
+        g.closePath(); g.fill();
+      }
+    }
+    pine(126, 612, 96, 62);
+    pine(182, 620, 74, 50);
+    pine(228, 630, 58, 40);
+    pine(286, 646, 44, 32);
+
+    /* 归鸟 */
+    function bird(x, y, s) {
+      g.strokeStyle = "rgba(20,16,34,0.82)";
+      g.lineWidth = 1.8;
+      g.beginPath();
+      g.moveTo(x - s, y);
+      g.quadraticCurveTo(x - s * 0.5, y - s * 0.62, x, y - s * 0.10);
+      g.quadraticCurveTo(x + s * 0.5, y - s * 0.62, x + s, y);
+      g.stroke();
+    }
+    bird(298, 332, 12);
+    bird(352, 308, 9);
+    bird(398, 340, 13);
+
+    /* 暗角 */
+    var vig = g.createRadialGradient(SW / 2, SH / 2, 220, SW / 2, SH / 2, 880);
+    vig.addColorStop(0, "rgba(0,0,0,0)");
+    vig.addColorStop(1, "rgba(0,0,0,0.38)");
+    g.fillStyle = vig; g.fillRect(0, 0, SW, SH);
+
+    /* 胶片颗粒：整数 LCG，确定性；只做一次 */
+    var id = g.getImageData(0, 0, SW, SH);
+    var d = id.data;
+    for (var p = 0; p < d.length; p += 4) {
+      var lcg = (p * 1103515245 + 12345) & 0x7fffffff;
+      var n = ((lcg >>> 9) % 11) - 5;
+      d[p] += n; d[p + 1] += n; d[p + 2] += n;
+    }
+    g.putImageData(id, 0, 0);
+    return c;
+  }
+
+  /* ---------------- 平均色金字塔：load 时建一次，运行时只查表 ---------------- */
+  var pyr = [];
+  function buildPyramid() {
+    pyr[0] = src;
+    for (var lv = 1; lv <= MAXLV; lv++) {
+      var s = 1 << lv;
+      var c = document.createElement("canvas");
+      c.width = SW / s; c.height = SH / s;          // 1280/64 = 20 整除，无需 ceil
+      var g = c.getContext("2d");
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = "high";
+      g.drawImage(src, 0, 0, SW, SH, 0, 0, c.width, c.height);
+      pyr[lv] = c;
+    }
+  }
+
+  var built = false;
+  function ensureBuilt() {
+    if (built) return;
+    built = true;
+    src = buildSource();
+    buildPyramid();
+    buildU();
+  }
+
+  /* ---------------- DOM ---------------- */
+  var view = document.getElementById("view");
+  var vg = view.getContext("2d");
+  var layer = document.createElement("canvas");
+  layer.width = SW; layer.height = SH;
+  var lg = layer.getContext("2d");
+
+  function roundRect(g, x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  /* ---------------- 每帧一次：先算唯一真值，再各写一次 ---------------- */
+  function reelDraw(t) {
+    ensureBuilt();
+
+    /* 相机：揭示段 1.00 → 清晰瞬间轻微过冲 → 缓推 → 定格 */
+    var atk = reel.easeOut(reel.span(t, T_POP0, T_POP0 + 0.10));
+    var rel = reel.easeOut(reel.span(t, T_POP0 + 0.10, T_POP1));
+    var pop = 0.020 * atk * (1 - rel);
+    var push = reel.easeInOut(reel.span(t, T_PUSH0, T_PUSH1));
+    var camS = (1 + pop) * (1 + 0.16 * push);
+    var camY = -8 * push;
+
+    /* 块层：逐块 LOD，全量重绘（无上一帧残留） */
+    lg.setTransform(1, 0, 0, 1, 0, 0);
+    lg.imageSmoothingEnabled = false;
+    var clearN = 0, maxLv = 0, cy, cx;
+    for (cy = 0; cy < NR; cy++) {
+      for (cx = 0; cx < NC; cx++) {
+        var u = U[cy * NC + cx];
+        var tc = T0 + SPREAD * u;
+        var u2 = reel.span(t, tc, tc + DUR);
+        var lv = MAXLV - Math.floor(MAXLV * u2 + 1e-9);
+        if (lv < 0) lv = 0;
+        if (lv === 0) clearN++; else if (lv > maxLv) maxLv = lv;
+        var s = 1 << lv, tw = CELL / s;
+        lg.drawImage(pyr[lv], cx * tw, cy * tw, tw, tw, cx * CELL, cy * CELL, CELL, CELL);
+      }
+    }
+
+    /* 合成到成片画布 */
+    vg.setTransform(1, 0, 0, 1, 0, 0);
+    vg.fillStyle = "#05070c";
+    vg.fillRect(0, 0, W, H);
+    vg.imageSmoothingEnabled = true;
+    vg.imageSmoothingQuality = "high";
+    vg.save();
+    vg.translate(W / 2, H / 2 + camY);
+    vg.scale(camS, camS);
+    vg.translate(-W / 2, -H / 2);
+    vg.drawImage(layer, 0, -CROP);
+    vg.restore();
+
+    drawChrome(t, clearN, maxLv);
+  }
+
+  /* ---------------- 场景内仪表：与块层同源，同一次插值 ---------------- */
+  function drawChrome(t, clearN, maxLv) {
+    var total = NCELL;
+    var pct = clearN / total;
+    var blockPx = 1 << maxLv;
+
+    /* 上下压暗，保证文字对比 */
+    var sc = vg.createLinearGradient(0, 0, 0, 200);
+    sc.addColorStop(0, "rgba(4,7,13,0.72)");
+    sc.addColorStop(1, "rgba(4,7,13,0)");
+    vg.fillStyle = sc; vg.fillRect(0, 0, W, 200);
+    var sc2 = vg.createLinearGradient(0, H - 210, 0, H);
+    sc2.addColorStop(0, "rgba(4,7,13,0)");
+    sc2.addColorStop(1, "rgba(4,7,13,0.88)");
+    vg.fillStyle = sc2; vg.fillRect(0, H - 210, W, 210);
+
+    /* 标题 */
+    vg.textAlign = "left";
+    vg.textBaseline = "alphabetic";
+    vg.fillStyle = "#f6efe2";
+    vg.font = '700 36px "Noto Sans CJK SC", system-ui, sans-serif';
+    vg.fillText("马赛克揭示", 72, 104);
+    vg.fillStyle = "#f0a24a";
+    vg.fillRect(72, 118, 56, 3);
+    vg.fillStyle = "rgba(246,239,226,0.60)";
+    vg.font = '500 14px "Noto Sans Mono CJK SC", monospace';
+    vg.fillText("M O S A I C   R E V E A L", 74, 144);
+
+    /* 技术点：这一行就是本特效的全部机制 */
+    vg.textAlign = "right";
+    vg.fillStyle = "rgba(246,239,226,0.52)";
+    vg.font = '500 14px "Noto Sans Mono CJK SC", monospace';
+    vg.fillText("清晰时刻 = hash(块坐标) · 与帧序无关", 1208, 144);
+
+    /* 仪表卡 */
+    vg.textAlign = "left";
+    roundRect(vg, 72, 556, 536, 100, 10);
+    vg.fillStyle = "rgba(8,12,20,0.74)";
+    vg.fill();
+    vg.strokeStyle = "rgba(255,255,255,0.13)";
+    vg.lineWidth = 1;
+    vg.stroke();
+
+    vg.fillStyle = "rgba(246,239,226,0.52)";
+    vg.font = '500 14px "Noto Sans Mono CJK SC", monospace';
+    vg.fillText("清晰块  CELLS CLEAR", 100, 592);
+    vg.fillText("最粗块  COARSEST", 348, 592);
+
+    vg.fillStyle = "#f6efe2";
+    vg.font = '700 30px "Noto Sans Mono CJK SC", monospace';
+    vg.textAlign = "right";
+    vg.fillText(String(clearN), 196, 632);
+    vg.textAlign = "left";
+    vg.font = '500 15px "Noto Sans Mono CJK SC", monospace';
+    vg.fillStyle = "rgba(246,239,226,0.55)";
+    vg.fillText("/ " + total, 202, 632);
+
+    vg.fillStyle = "#f0a24a";
+    vg.font = '700 30px "Noto Sans Mono CJK SC", monospace';
+    vg.fillText(blockPx + "px", 348, 632);
+
+    /* 进度条：与块层同源（clearN 就是同一遍循环里数出来的） */
+    roundRect(vg, 100, 646, 480, 6, 3);
+    vg.fillStyle = "rgba(255,255,255,0.13)"; vg.fill();
+    if (pct > 0) {
+      roundRect(vg, 100, 646, Math.max(6, 480 * pct), 6, 3);
+      vg.fillStyle = "#f0a24a"; vg.fill();
+    }
+  }
+
+  window.reelDraw = reelDraw;
+})();
+</script>
+</body>
+</html>

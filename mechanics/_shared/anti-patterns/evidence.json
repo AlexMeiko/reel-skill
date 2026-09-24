@@ -1,0 +1,145 @@
+{
+  "times": "0.0,1.0,2.0,3.0,3.9",
+  "report": [
+    {
+      "file": "a1-raf-wallclock.html",
+      "verdict": "DETERMINISTIC",
+      "same": 5,
+      "total": 5,
+      "perT": [
+        {
+          "t": "0_00",
+          "equal": true
+        },
+        {
+          "t": "1_00",
+          "equal": true
+        },
+        {
+          "t": "2_00",
+          "equal": true
+        },
+        {
+          "t": "3_00",
+          "equal": true
+        },
+        {
+          "t": "3_90",
+          "equal": true
+        }
+      ]
+    },
+    {
+      "file": "a2-random-per-frame.html",
+      "verdict": "NON-DETERMINISTIC",
+      "same": 0,
+      "total": 5,
+      "perT": [
+        {
+          "t": "0_00",
+          "equal": false
+        },
+        {
+          "t": "1_00",
+          "equal": false
+        },
+        {
+          "t": "2_00",
+          "equal": false
+        },
+        {
+          "t": "3_00",
+          "equal": false
+        },
+        {
+          "t": "3_90",
+          "equal": false
+        }
+      ]
+    },
+    {
+      "file": "a3-setinterval-accum.html",
+      "verdict": "NON-DETERMINISTIC",
+      "same": 1,
+      "total": 5,
+      "perT": [
+        {
+          "t": "0_00",
+          "equal": true
+        },
+        {
+          "t": "1_00",
+          "equal": false
+        },
+        {
+          "t": "2_00",
+          "equal": false
+        },
+        {
+          "t": "3_00",
+          "equal": false
+        },
+        {
+          "t": "3_90",
+          "equal": false
+        }
+      ]
+    },
+    {
+      "file": "a4-infinite-anim.html",
+      "verdict": "DETERMINISTIC",
+      "same": 5,
+      "total": 5,
+      "perT": [
+        {
+          "t": "0_00",
+          "equal": true
+        },
+        {
+          "t": "1_00",
+          "equal": true
+        },
+        {
+          "t": "2_00",
+          "equal": true
+        },
+        {
+          "t": "3_00",
+          "equal": true
+        },
+        {
+          "t": "3_90",
+          "equal": true
+        }
+      ]
+    },
+    {
+      "file": "a5-transition-timeline.html",
+      "verdict": "NON-DETERMINISTIC",
+      "same": 2,
+      "total": 5,
+      "perT": [
+        {
+          "t": "0_00",
+          "equal": true
+        },
+        {
+          "t": "1_00",
+          "equal": false
+        },
+        {
+          "t": "2_00",
+          "equal": false
+        },
+        {
+          "t": "3_00",
+          "equal": true
+        },
+        {
+          "t": "3_90",
+          "equal": false
+        }
+      ]
+    }
+  ]
+}

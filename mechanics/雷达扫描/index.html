@@ -1,0 +1,480 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 6 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>雷达扫描 · RADAR SWEEP</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #04101a; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #04101a;
+    color: #dceaf2;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  #cv { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+  /* 静态材质：只出现一次，不参与时间轴（无 animation / 无 transition） */
+  #tex {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    pointer-events: none; opacity: .55;
+    background: repeating-linear-gradient(180deg,
+      rgba(190,235,255,.030) 0px, rgba(190,235,255,.030) 1px,
+      rgba(0,0,0,0) 1px, rgba(0,0,0,0) 3px);
+  }
+  #vig {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    pointer-events: none;
+    background: radial-gradient(120% 120% at 29% 55%,
+      rgba(255,255,255,0) 40%, rgba(0,0,0,.42) 100%);
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <canvas id="cv" width="1280" height="720"></canvas>
+  <div id="tex"></div>
+  <div id="vig"></div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  /* =====================================================================
+     雷达 / 声呐扫描（RADAR SWEEP）
+     ---------------------------------------------------------------------
+     全片只有**一个**时间真值源：扫描角 θ(t)。
+         Ω(t) = ∫₀ᵗ ω(τ)dτ                （ω 分段，积分是闭式，见 Omega）
+         θ(t) = (θ₀ + Ω(t)) mod 2π         θ₀ = 0
+     下面 6 个量全部从同一个 Ω/θ 派生，没有任何第二条时间线：
+       ① 扫描扇形的前后沿几何        ② 余辉尾巴（角差 → 亮度，解析式）
+       ③ 目标是否已被扫过（累计圈数）  ④ 圈数读数 REV
+       ⑤ 方位读数 BEARING            ⑥ 右侧列表第 i 条的入场时刻（Ω 反解）
+     禁止 `ang += ω*dt`；禁止 `alpha *= 0.98` 这类覆盖式拖尾。
+     ===================================================================== */
+
+  var W = 1280, H = 720, TAU = Math.PI * 2, DEG = Math.PI / 180;
+
+  /* ---------- 时间轴常量（唯一的另一组字面量：它们定义 ω 曲线，因此也定义 Ω） ---------- */
+  var T_HOLD = 0.40;    // [0,0.40] 静止壳：ω=0，扫描线停在 000°
+  var T_RAMP = 1.10;    // 加速段结束，进入峰值角速度
+  var T_DEC0 = 3.60;    // 减速开始
+  var T_DEC1 = 4.60;    // 停止（此后 Ω 冻结 → 末帧定格 0.4s）
+  var W_PEAK = 2.1625;  // 峰值角速度 rad/s（= 123.9 °/s）
+  var WB = T_RAMP - T_HOLD, WD = T_DEC1 - T_DEC0;
+
+  /* Ω 的分段累计（解析积分常数，手算后可核对）：
+     加速段 ∫W·ss(u)du = W·WB·Fs(u)；减速段 ∫W·(1-ss(u))du = W·WD·(u-Fs(u)) */
+  var OB = W_PEAK * WB * 0.5;                 // 0.756875 rad = 43.37°
+  var OC = OB + W_PEAK * (T_DEC0 - T_RAMP);   // 6.163125 rad = 353.12°
+  var OD = OC + W_PEAK * WD * 0.5;            // 7.244375 rad = 415.07°
+
+  function ss(u) { return u * u * (3 - 2 * u); }          // smoothstep
+  function Fs(u) { return u * u * u - 0.5 * u * u * u * u; } // ∫ss
+
+  /* Ω(t) = ∫₀ᵗ ω dτ —— 闭式。ω 不是常数，所以绝不能写 θ += ω*dt 的累加版。 */
+  function Omega(t) {
+    if (t <= T_HOLD) return 0;
+    if (t < T_RAMP) return W_PEAK * WB * Fs((t - T_HOLD) / WB);
+    if (t < T_DEC0) return OB + W_PEAK * (t - T_RAMP);
+    if (t < T_DEC1) { var u = (t - T_DEC0) / WD; return OC + W_PEAK * WD * (u - Fs(u)); }
+    return OD;
+  }
+  /* 瞬时角速度：只喂「状态」判定，位置一律走 Omega() */
+  function omega(t) {
+    if (t <= T_HOLD || t >= T_DEC1) return 0;
+    if (t < T_RAMP) return W_PEAK * ss((t - T_HOLD) / WB);
+    if (t < T_DEC0) return W_PEAK;
+    return W_PEAK * (1 - ss((t - T_DEC0) / WD));
+  }
+
+  function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
+  function span(t, a, b) { return b > a ? clamp((t - a) / (b - a), 0, 1) : (t >= b ? 1 : 0); }
+  function easeOut(u) { u = clamp(u, 0, 1); return 1 - Math.pow(1 - u, 3); }
+  function mod2pi(x) { var r = x % TAU; return r < 0 ? r + TAU : r; }
+
+  /* 「从 0 到 t，扫描是否已经越过方位角 a」——用累计扫过次数，不用布尔状态。
+     Ω 单调不减，所以 floor((Ω-a)/2π)+1 ≥ 1 恒等价于「首次扫到的时刻已过」，
+     而且顺带给出「已扫过几次」（重扫时余辉会再亮一次）。 */
+  function passes(Om, a) { return Math.floor((Om - a) / TAU) + 1; }
+
+  /* ---------- 目标（字面量数组）：方位角 + 半径比例 + 信号强度 ---------- */
+  var A_DEG = [42, 128, 205, 296, 350];
+  var R_FRAC = [0.86, 0.55, 0.72, 0.93, 0.40];
+  var SIG = [0.86, 0.62, 0.94, 0.48, 0.72];
+  var N = A_DEG.length;
+  var A = A_DEG.map(function (d) { return d * DEG; });
+
+  /* 列表入场时刻 = Ω 的反解（同一个 Ω，不是另一条时间线）。
+     Ω 单调不减 → 48 步二分即可，纯函数、与历史路径无关。 */
+  var HIT_T = A.map(function (a) {
+    var lo = 0, hi = 5, k;
+    for (k = 0; k < 48; k++) { var m = (lo + hi) * 0.5; if (Omega(m) < a) lo = m; else hi = m; }
+    return hi;
+  });
+
+  /* ---------- 几何 ---------- */
+  var CX = 372, CY = 392, R = 236;
+  var REV_DECAY = 0.62;   // 余辉衰减角常数 rad（≈35.5°）
+  var TRAIL = 2.40;       // 尾巴总角长 rad（≈137.5°），恒定 → 「长度稳定」
+  var SLICES = 36, SW = TRAIL / SLICES;
+  var PING_DECAY = 0.22;  // 刚扫到时的爆闪
+
+  function bxy(a, r) { return { x: CX + Math.sin(a) * r, y: CY - Math.cos(a) * r }; }
+
+  /* ---------- 配色（深海军蓝 / 青灰 / 琥珀，3 主色 + 中性文字） ---------- */
+  var C_BG0 = '#04101a', C_TEXT = '#dceaf2', C_DIM = '#6d93a3';
+  var C_GRID = 'rgba(58,132,156,', C_RING = 'rgba(96,196,220,';
+  var C_AMB = '255,186,88', C_AMB_HI = '#ffd79a';
+  var C_SWP = '255,164,54';   // 扇形余辉用的更饱和琥珀
+
+  /* ---------- 画布与缓存资源（load 时生成一次，不每帧重建） ---------- */
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var DISK = null, BGG = null, BLIP = null, SWPG = null;
+
+  function rrect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+  function txt(s, x, y, font, color, align, base) {
+    ctx.font = font; ctx.fillStyle = color;
+    ctx.textAlign = align || 'left'; ctx.textBaseline = base || 'alphabetic';
+    ctx.fillText(s, x, y);
+  }
+  function pad3(v) { var s = String(Math.max(0, Math.min(999, Math.round(v)))); while (s.length < 3) s = '0' + s; return s; }
+
+  function buildArt() {
+    BGG = ctx.createRadialGradient(CX, CY, 0, CX, CY, 900);
+    BGG.addColorStop(0, '#0a2130');
+    BGG.addColorStop(0.42, '#061726');
+    BGG.addColorStop(1, C_BG0);
+
+    DISK = ctx.createRadialGradient(CX, CY, 0, CX, CY, R);
+    DISK.addColorStop(0, 'rgba(28,86,112,0.30)');
+    DISK.addColorStop(0.55, 'rgba(16,58,80,0.22)');
+    DISK.addColorStop(1, 'rgba(8,32,46,0.10)');
+
+    /* 扇形余辉的径向剖面（平滑，无硬环）：配合每片的 globalAlpha 用 */
+    SWPG = ctx.createRadialGradient(CX, CY, R * 0.06, CX, CY, R);
+    SWPG.addColorStop(0.00, 'rgba(' + C_SWP + ',0.13)');
+    SWPG.addColorStop(0.52, 'rgba(' + C_SWP + ',0.20)');
+    SWPG.addColorStop(0.80, 'rgba(' + C_SWP + ',0.36)');
+    SWPG.addColorStop(1.00, 'rgba(' + C_SWP + ',0.31)');
+
+    /* 光点辉光贴图：一次性预渲染，不每帧重生成 */
+    BLIP = document.createElement('canvas');
+    BLIP.width = 64; BLIP.height = 64;
+    var bc = BLIP.getContext('2d');
+    var bg = bc.createRadialGradient(32, 32, 0, 32, 32, 32);
+    bg.addColorStop(0.00, 'rgba(' + C_AMB + ',1)');
+    bg.addColorStop(0.22, 'rgba(' + C_AMB + ',0.62)');
+    bg.addColorStop(0.52, 'rgba(' + C_AMB + ',0.16)');
+    bg.addColorStop(1.00, 'rgba(' + C_AMB + ',0)');
+    bc.fillStyle = bg; bc.fillRect(0, 0, 64, 64);
+  }
+
+  /* =====================================================================
+     静态壳：底盘 / 同心圈 / 辐条 / 刻度 / 方位字 / 中心十字
+     t=0 就全部在位，且 [0,0.40] 内完全不动。
+     ===================================================================== */
+  function drawShell() {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+
+    ctx.beginPath(); ctx.arc(CX, CY, R, 0, TAU);
+    ctx.fillStyle = DISK; ctx.fill();
+
+    var i, a, p, q;
+    /* 同心圈 */
+    var rf = [0.25, 0.50, 0.75];
+    for (i = 0; i < rf.length; i++) {
+      ctx.beginPath(); ctx.arc(CX, CY, R * rf[i], 0, TAU);
+      ctx.lineWidth = 1; ctx.strokeStyle = C_GRID + '0.30)'; ctx.stroke();
+    }
+    /* 辐条每 30° */
+    for (i = 0; i < 12; i++) {
+      a = i * 30 * DEG;
+      p = bxy(a, R * 0.06); q = bxy(a, R);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+      ctx.lineWidth = 1; ctx.strokeStyle = C_GRID + (i % 3 === 0 ? '0.26)' : '0.13)'); ctx.stroke();
+    }
+    /* 外圈刻度：每 10° 短刻度，每 30° 长刻度 */
+    for (i = 0; i < 36; i++) {
+      a = i * 10 * DEG;
+      var major = i % 3 === 0;
+      p = bxy(a, R); q = bxy(a, R - (major ? 15 : 8));
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+      ctx.lineWidth = major ? 2 : 1;
+      ctx.strokeStyle = C_RING + (major ? '0.62)' : '0.26)'); ctx.stroke();
+    }
+    /* 外圈 */
+    ctx.beginPath(); ctx.arc(CX, CY, R, 0, TAU);
+    ctx.lineWidth = 2; ctx.strokeStyle = C_RING + '0.50)'; ctx.stroke();
+
+    /* 方位字（4 个基数方向，静态） */
+    var card = [['000', 0], ['090', 90], ['180', 180], ['270', 270]];
+    for (i = 0; i < card.length; i++) {
+      var pt = bxy(card[i][1] * DEG, R + 20);
+      txt(card[i][0], pt.x, pt.y + 4, '500 12px "Noto Sans Mono CJK SC", monospace',
+        C_DIM, 'center', 'alphabetic');
+    }
+    /* 中心十字 */
+    ctx.beginPath();
+    ctx.moveTo(CX - 7, CY); ctx.lineTo(CX + 7, CY);
+    ctx.moveTo(CX, CY - 7); ctx.lineTo(CX, CY + 7);
+    ctx.lineWidth = 1; ctx.strokeStyle = C_RING + '0.40)'; ctx.stroke();
+  }
+
+  /* =====================================================================
+     扫描扇形 = 解析式余辉。
+     每一片薄扇区的亮度 = f(它落后前沿的角度) = exp(-Δθ / REV_DECAY)。
+     —— 不是「上一帧画布 ×0.95」，所以 seek 到任意 t 都对得上。
+     ===================================================================== */
+  function drawSweep(ang) {
+    ctx.globalCompositeOperation = 'lighter';
+    var i, back, a0, a1, rIn = R * 0.06;
+    /* 角向：globalAlpha = exp(-Δθ/REV_DECAY)（解析余辉）；
+       径向：一张 load 时建好的渐变（平滑，没有硬环）。
+       两者相乘 —— 不做任何「上一帧画布 ×0.95」的覆盖。 */
+    for (i = SLICES - 1; i >= 0; i--) {
+      back = (i + 0.5) * SW;
+      ctx.globalAlpha = Math.exp(-back / REV_DECAY);
+      if (ctx.globalAlpha < 0.02) continue;
+      a0 = ang - (i + 1) * SW - Math.PI / 2;
+      a1 = ang - i * SW - Math.PI / 2;
+      ctx.beginPath();
+      ctx.arc(CX, CY, R, a0, a1);
+      ctx.arc(CX, CY, rIn, a1, a0, true);
+      ctx.closePath();
+      ctx.fillStyle = SWPG;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    /* 前沿：一条亮线 + 柔光 + 端点亮点 */
+    var ea = ang - Math.PI / 2;
+    var x0 = CX + Math.cos(ea) * R * 0.06, y0 = CY + Math.sin(ea) * R * 0.06;
+    var x1 = CX + Math.cos(ea) * R, y1 = CY + Math.sin(ea) * R;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+    ctx.lineWidth = 9; ctx.strokeStyle = 'rgba(' + C_AMB + ',0.10)'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,234,186,0.88)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x1, y1, 3.2, 0, TAU);
+    ctx.fillStyle = 'rgba(255,244,214,0.95)'; ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /* =====================================================================
+     目标光点：亮/不亮、余辉、爆闪环 全部只由 (Ω, θ) 决定。
+     ===================================================================== */
+  function drawTargets(t, Om, ang) {
+    ctx.globalCompositeOperation = 'source-over';
+    var i, tp, age, glow, ping, cap, al, p;
+    for (i = 0; i < N; i++) {
+      tp = bxy(A[i], R * R_FRAC[i]);
+      age = mod2pi(ang - A[i]);              // 距上次扫过它的角差
+      glow = Math.exp(-age / REV_DECAY);     // 解析余辉
+      ping = Math.exp(-age / PING_DECAY);
+      cap = passes(Om, A[i]) >= 1;
+      al = cap ? Math.max(0.52, glow) : 0.20;
+
+      if (!cap) {
+        ctx.beginPath(); ctx.arc(tp.x, tp.y, 6.5, 0, TAU);
+        ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(140,192,214,0.34)'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(tp.x, tp.y, 1.6, 0, TAU);
+        ctx.fillStyle = 'rgba(140,192,214,0.30)'; ctx.fill();
+        continue;
+      }
+      /* 爆闪扩散环（重扫时会再出现一次，同样由 age 派生） */
+      if (ping > 0.03) {
+        ctx.beginPath(); ctx.arc(tp.x, tp.y, 7 + (1 - ping) * 30, 0, TAU);
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = 'rgba(' + C_AMB + ',' + (ping * 0.5).toFixed(4) + ')';
+        ctx.stroke();
+      }
+      /* 辉光 + 核心 */
+      ctx.globalAlpha = al;
+      var rr = 26 + 14 * glow;
+      ctx.drawImage(BLIP, tp.x - rr, tp.y - rr, rr * 2, rr * 2);
+      ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.arc(tp.x, tp.y, 4.6, 0, TAU);
+      ctx.fillStyle = 'rgba(' + C_AMB + ',' + Math.min(1, al + 0.25).toFixed(4) + ')';
+      ctx.fill();
+      ctx.beginPath(); ctx.arc(tp.x, tp.y, 2.0, 0, TAU);
+      ctx.fillStyle = 'rgba(255,246,222,' + Math.min(1, al + 0.3).toFixed(4) + ')'; ctx.fill();
+
+      /* 标签：只给已捕获的，避免堆叠 */
+      p = bxy(A[i], R * R_FRAC[i] + 16);
+      txt('T-0' + (i + 1), p.x, p.y + 4, '500 10px "Noto Sans Mono CJK SC", monospace',
+        'rgba(255,215,154,' + (0.35 + 0.45 * glow).toFixed(3) + ')', 'center', 'alphabetic');
+    }
+
+    /* 当前接触 → 对应列表行 的连线（同一 Ω 派生的 glow 决定亮度；同时只有一个） */
+    var best = -1, bg2 = 0.02;
+    for (i = 0; i < N; i++) {
+      if (passes(Om, A[i]) < 1) continue;
+      var g = Math.exp(-mod2pi(ang - A[i]) / REV_DECAY);
+      if (g > bg2) { bg2 = g; best = i; }
+    }
+    if (best >= 0 && bg2 > 0.05) {
+      var s = bxy(A[best], R * R_FRAC[best] + 9);
+      var ey = ROW_Y0 + best * ROW_H + ROW_H * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.quadraticCurveTo((s.x + PANEL_X0) * 0.5, s.y * 0.35 + ey * 0.65, PANEL_X0 - 14, ey);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(' + C_AMB + ',' + (0.30 * bg2).toFixed(3) + ')';
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(PANEL_X0 - 14, ey, 2.2, 0, TAU);
+      ctx.fillStyle = 'rgba(' + C_AMB + ',' + (0.55 * bg2).toFixed(3) + ')'; ctx.fill();
+    }
+  }
+
+  /* =====================================================================
+     右侧列表：第 i 行在 Ω 反解出的首次捕获时刻入场。
+     ===================================================================== */
+  var PANEL_X0 = 676, PANEL_Y0 = 150, PANEL_X1 = 1216, PANEL_Y1 = 560;
+  var ROW_Y0 = 214, ROW_H = 66;
+  var SEG = 8;
+
+  function drawPanel(t, Om) {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+
+    rrect(ctx, PANEL_X0, PANEL_Y0, PANEL_X1 - PANEL_X0, PANEL_Y1 - PANEL_Y0, 14);
+    ctx.fillStyle = 'rgba(8,26,36,0.62)'; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = C_GRID + '0.38)'; ctx.stroke();
+
+    /* 标题 + 状态胶囊（状态与读数同一个 Ω，不会各说各话） */
+    txt('目标列表', PANEL_X0 + 24, PANEL_Y0 + 36,
+      '700 19px "Noto Sans CJK SC", system-ui, sans-serif', C_TEXT);
+    txt('TARGET LIST', PANEL_X0 + 106, PANEL_Y0 + 36,
+      '500 10px "Noto Sans Mono CJK SC", monospace', C_DIM);
+
+    var locked = t >= T_DEC1, decel = t >= T_DEC0 && !locked, hold = t <= T_HOLD;
+    var stxt = hold ? '待机 STANDBY' : locked ? '锁定 LOCKED' : decel ? '减速 DECEL' : '扫描 SCANNING';
+    var scol = locked ? 'rgba(' + C_AMB + ',0.95)' : hold ? 'rgba(140,180,200,0.75)' : 'rgba(140,220,235,0.92)';
+    txt(stxt, PANEL_X1 - 24, PANEL_Y0 + 36,
+      '600 12px "Noto Sans Mono CJK SC", monospace', scol, 'right');
+
+    ctx.beginPath();
+    ctx.moveTo(PANEL_X0 + 16, PANEL_Y0 + 54); ctx.lineTo(PANEL_X1 - 16, PANEL_Y0 + 54);
+    ctx.lineWidth = 1; ctx.strokeStyle = C_GRID + '0.30)'; ctx.stroke();
+
+    var i, k, rowY, fp, cap, flash, lit;
+    for (i = 0; i < N; i++) {
+      rowY = ROW_Y0 + i * ROW_H;
+      cap = passes(Om, A[i]) >= 1;
+      fp = easeOut(span(t, HIT_T[i], HIT_T[i] + 0.60));
+      flash = cap ? Math.exp(-Math.max(0, t - HIT_T[i]) / 0.45) : 0;
+
+      if (flash > 0.01) {
+        rrect(ctx, PANEL_X0 + 12, rowY + 2, PANEL_X1 - PANEL_X0 - 24, ROW_H - 4, 8);
+        ctx.fillStyle = 'rgba(' + C_AMB + ',' + (0.075 * flash).toFixed(4) + ')'; ctx.fill();
+      }
+      if (cap && fp > 0) {
+        ctx.beginPath();
+        ctx.moveTo(PANEL_X0 + 16, rowY); ctx.lineTo(PANEL_X0 + 16 + 30 * fp, rowY);
+        ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(' + C_AMB + ',' + (0.75 * fp).toFixed(3) + ')'; ctx.stroke();
+      }
+
+      txt('T-0' + (i + 1), PANEL_X0 + 24, rowY + 31,
+        '700 18px "Noto Sans Mono CJK SC", monospace',
+        cap ? C_AMB_HI : 'rgba(90,124,140,0.85)');
+      txt('方位 ' + pad3(A_DEG[i]) + '°   距离 ' + R_FRAC[i].toFixed(2) + ' R',
+        PANEL_X0 + 24, rowY + 51,
+        '500 12px "Noto Sans Mono CJK SC", monospace',
+        cap ? 'rgba(150,196,214,0.9)' : 'rgba(80,110,126,0.8)');
+
+      /* 信号强度条：段数 = 固定强度 × 入场进度，同一次插值算出来 */
+      lit = Math.round(SIG[i] * SEG * fp);
+      for (k = 0; k < SEG; k++) {
+        ctx.fillStyle = k < lit ? 'rgba(' + C_AMB + ',' + (0.42 + 0.5 * fp).toFixed(3) + ')'
+                                : 'rgba(30,64,80,0.75)';
+        ctx.fillRect(838 + k * 19, rowY + 22, 15, 10);
+      }
+      txt(cap ? '已捕获' : '待扫描', PANEL_X1 - 24, rowY + 38,
+        '700 13px "Noto Sans CJK SC", system-ui, sans-serif',
+        cap ? 'rgba(' + C_AMB + ',' + (0.55 + 0.45 * fp).toFixed(3) + ')' : 'rgba(90,124,140,0.75)',
+        'right');
+
+      if (i < N - 1) {
+        ctx.beginPath();
+        ctx.moveTo(PANEL_X0 + 16, rowY + ROW_H); ctx.lineTo(PANEL_X1 - 16, rowY + ROW_H);
+        ctx.lineWidth = 1; ctx.strokeStyle = C_GRID + '0.18)'; ctx.stroke();
+      }
+    }
+  }
+
+  /* =====================================================================
+     仪表：方位 / 圈数 / 已捕获 —— 全部由同一个 Ω(t) 派生
+     ===================================================================== */
+  function drawHUD(t, Om, ang) {
+    var i, n = 0;
+    for (i = 0; i < N; i++) if (passes(Om, A[i]) >= 1) n++;
+    var rev = Math.floor(Om / TAU);
+
+    var xs = [PANEL_X0, PANEL_X0 + 182, PANEL_X0 + 334];
+    var labs = ['方位 BEARING', '圈数 REV', '已捕获 CONTACT'];
+    var vals = [pad3(ang / DEG) + '°', String(rev), n + ' / ' + N];
+    var vcol = [C_TEXT, C_TEXT, n === N ? C_AMB_HI : C_TEXT];
+    for (i = 0; i < 3; i++) {
+      txt(labs[i], xs[i], 596, '500 11px "Noto Sans Mono CJK SC", monospace', C_DIM);
+      txt(vals[i], xs[i], 628, '600 24px "Noto Sans Mono CJK SC", monospace', vcol[i]);
+    }
+    txt('角速度 ω ' + omega(t).toFixed(2) + ' rad/s', PANEL_X1, 596,
+      '500 11px "Noto Sans Mono CJK SC", monospace', C_DIM, 'right');
+    txt('示意数据 · SCHEMATIC', PANEL_X1, 628,
+      '500 11px "Noto Sans CJK SC", system-ui, sans-serif', 'rgba(90,124,140,0.85)', 'right');
+    /* 下标/上标字形（₀ ᵗ）在 Noto 里是豆腐块 —— 实测踩过，这里一律用 ASCII 数字 */
+    txt('θ(t) = (θ0 + ∫ω dτ) mod 2π     θ0 = 0     Ω = ' + (OD / DEG).toFixed(1) + '°',
+      PANEL_X0, 654, '500 11px "Noto Sans Mono CJK SC", monospace', 'rgba(90,124,140,0.8)');
+  }
+
+  function drawTitle() {
+    txt('雷达扫描', 64, 96, '800 36px "Noto Sans CJK SC", system-ui, sans-serif', C_TEXT);
+    txt('RADAR SWEEP / SINGLE-SOURCE PHASE', 64, 124,
+      '500 11px "Noto Sans Mono CJK SC", monospace', C_DIM);
+    txt('扫描角是唯一真值源：扇形 · 余辉 · 点亮时刻 · 圈数 · 列表 全部由它派生',
+      64, 150, '500 12px "Noto Sans CJK SC", system-ui, sans-serif', 'rgba(143,180,194,0.95)');
+  }
+
+  window.reelDraw = function (t) {
+    var Om = Omega(t);
+    var ang = Om % TAU;
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.lineCap = 'butt';
+    ctx.fillStyle = BGG; ctx.fillRect(0, 0, W, H);
+
+    drawShell();
+    drawSweep(ang);
+    drawTargets(t, Om, ang);
+    drawPanel(t, Om);
+    drawHUD(t, Om, ang);
+    drawTitle();
+  };
+
+  buildArt();
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>

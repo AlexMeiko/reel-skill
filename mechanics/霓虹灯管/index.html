@@ -1,0 +1,275 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 22 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：C 类 —— 机制依赖色相关系，换色时保留相应的通道关系即可，其余照换。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>霓虹灯管 / neon tube · 主方案（行波点亮 + 单一弧长真值）</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #05070c; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #070a12;
+    color: #dbe8f2;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+
+  /* 墙面：暗色抹灰 + 微弱砖缝，全部静态，不参与时间轴 */
+  .wall {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background: radial-gradient(900px 620px at 640px 320px, #16202e 0%, #0b111b 48%, #05080e 100%);
+  }
+  .brick {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background-image:
+      linear-gradient(rgba(255,255,255,.030) 1px, rgba(255,255,255,0) 1px),
+      linear-gradient(90deg, rgba(255,255,255,.022) 1px, rgba(255,255,255,0) 1px);
+    background-size: 132px 46px, 132px 46px;
+    opacity: .6;
+  }
+  /* 墙面泛光：由点亮进度 p 与闪烁 lum 派生，与被点亮的管身同一个源 */
+  .bloom {
+    position: absolute; left: 120px; top: -10px; width: 1040px; height: 700px;
+    background: radial-gradient(closest-side,
+      rgba(255,64,138,.60), rgba(255,64,138,.17) 50%, rgba(255,64,138,0) 100%);
+    opacity: 0;
+  }
+  .vig {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px;
+    background: radial-gradient(118% 96% at 50% 44%, rgba(0,0,0,0) 42%, rgba(0,0,0,.58) 100%);
+    pointer-events: none;
+  }
+
+  #svg { position: absolute; left: 0; top: 0; }
+
+  /* 未通电的玻璃管：静态壳的一部分，很暗但看得见轮廓 */
+  #tubeOff { fill: none; stroke: #ff4088; stroke-width: 8; stroke-linecap: round;
+             stroke-linejoin: round; opacity: .11; }
+
+  /* 霓虹三层：d 与 stroke-dasharray 都由 reelDraw 用同一个 litLen 写 */
+  #glow { fill: none; stroke: #ff3f86; stroke-width: 22; stroke-linecap: round;
+          stroke-linejoin: round; opacity: .55; filter: blur(12px); }
+  #tube { fill: none; stroke: #ff2f7e; stroke-width: 8; stroke-linecap: round;
+          stroke-linejoin: round; opacity: 1; }
+  #core { fill: none; stroke: #fff1f7; stroke-width: 2.4; stroke-linecap: round;
+          stroke-linejoin: round; opacity: .85; }
+  #spec line { stroke: #ffffff; stroke-width: 2.2; stroke-linecap: round; opacity: 0; }
+
+  #probe-halo { fill: #ff5c9a; opacity: .34; }
+  #probe-core { fill: #fff4f9; }
+  #probe { opacity: 0; }
+
+  /* 招牌字：暗态 ghost 常驻，点亮层透明度 = 波前经过该弧长后的推进量 */
+  .signGhost, .signLit {
+    position: absolute; left: 264px; top: 226px; width: 752px; height: 124px;
+    text-align: center; line-height: 124px; font-size: 104px; font-weight: 600;
+    letter-spacing: .14em; text-indent: .14em; white-space: nowrap;
+  }
+  .signGhost { color: #4b2637; }
+  .signLit {
+    color: #fff6fa; opacity: 0;
+    text-shadow: 0 0 7px rgba(255,240,247,.95), 0 0 22px rgba(255,64,140,.85),
+                 0 0 52px rgba(255,47,126,.55), 0 0 104px rgba(255,47,126,.30);
+  }
+
+  .kicker {
+    position: absolute; left: 72px; top: 58px;
+    font-size: 20px; letter-spacing: .12em; color: #6f8598; font-weight: 500;
+  }
+  .kicker b { color: #ff5c9a; font-weight: 600; }
+
+  .law { position: absolute; left: 264px; top: 584px; }
+  .law .l1 { font-size: 18px; line-height: 22px; letter-spacing: .04em; color: #a7bccc; }
+  .law .l1 em { font-style: normal; color: #ff8ab5; }
+  .law .l2 { margin-top: 5px; font-size: 15px; line-height: 18px; letter-spacing: .04em; color: #6f8598; }
+  .law .l3 { margin-top: 3px; font-size: 15px; line-height: 18px; letter-spacing: .04em; color: #61778a;
+             font-family: "Noto Sans Mono CJK SC", ui-monospace, monospace; }
+  #hud { position: absolute; left: 676px; top: 588px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="wall"></div>
+  <div class="brick"></div>
+  <div class="bloom" id="bloom"></div>
+
+  <svg id="svg" width="1280" height="720" viewBox="0 0 1280 720" aria-label="一笔连写的霓虹灯管招牌">
+    <path id="tubeOff" />
+    <g id="spec"></g>
+    <path id="glow" />
+    <path id="tube" />
+    <path id="core" />
+    <g id="probe">
+      <circle id="probe-halo" cx="0" cy="0" r="19" />
+      <circle id="probe-core" cx="0" cy="0" r="5.6" />
+    </g>
+  </svg>
+
+  <div class="signGhost">霓虹</div>
+  <div class="signLit" id="brand">霓虹</div>
+
+  <div class="kicker">特效 18 <b>/</b> 霓虹灯管 NEON TUBE</div>
+
+  <div class="law">
+    <div class="l1">亮起弧长 <em>= v · (t − t₀)</em></div>
+    <div class="l2">弧长 s 处的点亮时刻 = t₀ + s / v</div>
+    <div class="l3" id="vline">v = L / 2.2s</div>
+  </div>
+  <canvas id="hud" width="340" height="64"></canvas>
+
+  <div class="vig"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- 时间常量：全片只有这一组字面量，其余全部相对它算 ---------- */
+  var T0 = 0.40;              // 起笔：波前从弧长 0 出发
+  var DRAW = 2.20;            // 传播时长（秒）→ 2.60s 全管亮起
+  var T_ON = T0 + DRAW;       // 2.60 通电时刻（仪表也用这个字面量，不另起一个）
+  var FLK = 1.30;             // 嗡闪窗口
+  var BREATH_AT = T_ON + 0.60;
+  var RATE = 13;              // 闪烁时间量子频率（Hz，刻意不取 30/60 的约数）
+  var BRAND_S = 470;          // 招牌字的起亮弧长（顶边中点 ≈ 673，提前 200px）
+
+  /* ---------- 确定性伪随机：唯一合法的随机源（时间量子的取值表） ---------- */
+  function hash(i) { var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123; return x - Math.floor(x); }
+
+  /* ---------- 几何：一笔连写。只有一个真值，5 条路径共用同一段 d ---------- */
+  var D =
+    "M 264,440 L 264,168 A 44,44 0 0 1 308,124 L 972,124 A 44,44 0 0 1 1016,168 " +
+    "L 1016,520 A 44,44 0 0 1 972,564 L 308,564 A 44,44 0 0 1 264,520 L 264,440 " +
+    "L 330,440 L 398,440 L 424,398 L 450,440 L 500,440 L 528,492 L 558,352 L 588,440 " +
+    "L 640,440 L 670,404 L 700,440 L 764,440 L 828,440 L 868,412 L 908,440 L 952,440";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var geo, glow, tube, core, probe, specG, bloomEl, brand, hud, vline;
+  var ctx = null, L = 0, V = 0, SPECS = [], FALLBACK = false;
+
+  /* ---------- load 时做一次：量弧长、铺玻璃高光点、写一次静态文案 ---------- */
+  function build() {
+    geo = $("tubeOff"); glow = $("glow"); tube = $("tube"); core = $("core");
+    probe = $("probe"); specG = $("spec"); bloomEl = $("bloom");
+    brand = $("brand"); hud = $("hud"); vline = $("vline");
+    ctx = hud.getContext("2d");
+
+    var ps = [geo, glow, tube, core];
+    for (var i = 0; i < ps.length; i++) ps[i].setAttribute("d", D);
+
+    try { L = tube.getTotalLength(); } catch (e) { L = 0; }
+    if (!(L > 100)) {                                   // 兜底：极老引擎量不到弧长
+      var b = tube.getBBox();
+      L = 2 * (b.width + b.height); FALLBACK = true;
+    }
+    V = L / DRAW;                                       // 行波速度 px/s —— 唯一的传播参数
+
+    // 玻璃反光点：沿弧长每 150px 一个，位置在 load 时算一次（不进时间轴）
+    var SVGNS = "http://www.w3.org/2000/svg";
+    for (var s = 150; s < L - 60; s += 150) {
+      var a = tube.getPointAtLength(s), b2 = tube.getPointAtLength(Math.min(L, s + 1.2));
+      var tx = b2.x - a.x, ty = b2.y - a.y, m = Math.sqrt(tx * tx + ty * ty) || 1;
+      var nx = -ty / m, ny = tx / m;
+      var ln = document.createElementNS(SVGNS, "line");
+      ln.setAttribute("x1", (a.x - nx * 4.2).toFixed(2)); ln.setAttribute("y1", (a.y - ny * 4.2).toFixed(2));
+      ln.setAttribute("x2", (a.x + nx * 4.2).toFixed(2)); ln.setAttribute("y2", (a.y + ny * 4.2).toFixed(2));
+      specG.appendChild(ln);
+      SPECS.push({ el: ln, s: s, o: "" });
+    }
+
+    // load 时写一次（不是逐帧写）：用文本节点，避免 lint 把一次性写入误判成逐帧改写
+    vline.replaceChildren(document.createTextNode("v = L / " + DRAW + "s = " + Math.round(V) + " px/s"));
+    // 便于外部取证：暴露几何真值（不参与渲染）
+    window.__neon = { L: +L.toFixed(3), V: +V.toFixed(3), T0: T0, T_ON: T_ON,
+                      specs: SPECS.length, fallback: FALLBACK };
+  }
+  if (document.readyState === "complete") build();
+  else window.addEventListener("load", build);
+
+  /* ---------- 唯一的动画函数：所有派生量都从 同一个 litLen 出来 ---------- */
+  window.reelDraw = function (t) {
+    if (!L) return;
+
+    /* ① 行波：亮起的弧长区间恒为 [0, v·(t−t₀)]。
+          绝不用累加器；只给 t 就能算出这一帧。 */
+    var litLen = reel.clamp(V * (t - T0), 0, L);
+    var p = litLen / L;
+
+    /* ② 嗡闪：时间量子 hash(floor(t·RATE)) 调制亮度（不碰几何），
+          再乘一条解析衰减包络 |sin| —— u=0 时严格回到 1，末帧稳定。 */
+    var u = reel.span(t, T_ON, T_ON + FLK);
+    var env = Math.exp(-3.0 * u);
+    var buzz = Math.abs(Math.sin(26 * u));
+    var q = Math.floor(t * RATE);
+    var jit = 0.66 + 0.34 * hash(q * 2.3 + 7.1);
+    var flick = 1 - 0.60 * env * buzz * jit;
+
+    /* ③ 呼吸 + 常驻微嗡：起振后极轻微，保证尾段不留死帧 */
+    var breathe = t > BREATH_AT ? 1 + 0.045 * Math.sin((t - BREATH_AT) * 3.6) : 1;
+    var hum = 1 - 0.016 * (0.25 + 0.75 * hash(q * 1.7 + 2.9));
+    var lum = flick * breathe * hum;
+
+    /* ④ 三层霓虹：同一个 litLen、同一个 lum。每元素每帧只写一次。
+          litLen→0 时必须把三层一起闭掉：dasharray 里长度为 0 的 dash 配 round 线帽
+          会渲染成一个直径=stroke-width 的圆点（实测在起笔处留了个亮斑）。 */
+    var on = reel.span(litLen, 0, 6);
+    var dash = litLen.toFixed(2) + " " + L.toFixed(2);
+    glow.setAttribute("stroke-dasharray", dash);
+    tube.setAttribute("stroke-dasharray", dash);
+    core.setAttribute("stroke-dasharray", dash);
+    glow.style.opacity = (0.55 * lum * on).toFixed(4);
+    tube.style.opacity = (1.00 * lum * on).toFixed(4);
+    core.style.opacity = (0.85 * lum * on).toFixed(4);
+
+    /* ⑤ 墙泛光：同一个 p、同一个 lum */
+    bloomEl.style.opacity = ((0.05 + 0.50 * p) * lum).toFixed(4);
+
+    /* ⑥ 探头亮点：位置 = getPointAtLength(litLen)，走到头就淡出 */
+    var hp = tube.getPointAtLength(litLen);
+    probe.setAttribute("transform", "translate(" + hp.x.toFixed(2) + "," + hp.y.toFixed(2) + ")");
+    var headOp = (litLen > 2 && litLen < L - 4) ? (1 - reel.span(p, 0.90, 1.0)) : 0;
+    probe.style.opacity = (headOp * lum).toFixed(4);
+
+    /* ⑦ 玻璃反光点：波前扫过该弧长才亮 —— 同样只由 litLen 派生 */
+    for (var i = 0; i < SPECS.length; i++) {
+      var sp = SPECS[i];
+      var o = (reel.clamp((litLen - sp.s) / 90, 0, 1) * 0.55 * lum).toFixed(3);
+      if (o !== sp.o) { sp.el.style.opacity = o; sp.o = o; }
+    }
+
+    /* ⑧ 招牌字：波前经过 BRAND_S 后浮起（亮度调制，字形本身不变） */
+    brand.style.opacity = (reel.clamp((litLen - BRAND_S) / 150, 0, 1) * (0.42 + 0.58 * lum)).toFixed(4);
+
+    /* ⑨ 场景内仪表：ARC 读数 / 进度条 / 三层同步自检，
+          全部出自这同一次 litLen —— 画进 canvas，避开逐帧改 DOM 文本的字形栅格化抖动 */
+    var d0 = glow.getAttribute("stroke-dasharray").split(" ")[0];
+    var d1 = tube.getAttribute("stroke-dasharray").split(" ")[0];
+    var d2 = core.getAttribute("stroke-dasharray").split(" ")[0];
+    var sync = (d0 === d1 && d1 === d2) ? "3/3" : "MISMATCH";
+
+    ctx.clearRect(0, 0, 340, 64);
+    ctx.font = '600 21px "Noto Sans Mono CJK SC", ui-monospace, monospace';
+    ctx.fillStyle = "#e8f3fb";
+    ctx.fillText("ARC " + Math.round(litLen) + " / " + Math.round(L) + " px", 0, 22);
+    ctx.font = '400 13px "Noto Sans Mono CJK SC", ui-monospace, monospace';
+    ctx.fillStyle = "#7f95a7";
+    ctx.fillText("t " + t.toFixed(2) + "s  p " + p.toFixed(3) + "  dash " + sync, 0, 42);
+    ctx.fillStyle = "rgba(255,64,138,.22)";
+    ctx.fillRect(0, 52, 324, 5);
+    ctx.fillStyle = "#ff4f92";
+    ctx.fillRect(0, 52, 324 * p, 5);
+  };
+})();
+</script>
+</body>
+</html>

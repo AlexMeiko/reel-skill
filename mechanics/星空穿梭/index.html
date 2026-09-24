@@ -1,0 +1,366 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 13 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：B 类 —— 用到加色混合 / 发光，换浅底时把 screen 改 multiply、发光改投影，机制不变。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>星空穿梭 · STARFIELD WARP</title>
+<script>
+  window.REEL = { duration: 5.0, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #02030a; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #02030a;
+    color: #e9f2ff;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  #cv { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+</style>
+</head>
+<body>
+<div class="stage"><canvas id="cv" width="1280" height="720"></canvas></div>
+<script>
+(function () {
+  'use strict';
+
+  /* =====================================================================
+     星空穿梭 / STARFIELD WARP
+     核心：星点的深度 z 是 t 的**闭式函数**，没有任何 `z -= speed*dt` 累加。
+         u(t) = (phi_i + S(t)) mod RANGE        <- 取模回绕，不是累加也不是重置
+         z(t) = ZF - u(t)
+     其中 S(t) = ∫₀ᵗ v(τ)dτ 是速度曲线的**解析积分**（分段闭式，见 dist()）。
+     拖尾是解析式：直接求该星在 t、t-DT、t-2DT … 的位置再连线段
+     （不是 `fillRect` 半透明覆盖上一帧 —— 那种写法 seek 到任意 t 必坏）。
+     ===================================================================== */
+
+  var W = 1280, H = 720, CX = 640, CY = 360, TAU = Math.PI * 2;
+
+  /* ---------- 时间轴：全片唯一的时间真值来源 ---------- */
+  var T0 = 0.35;   // 起手静止结束，开始加速
+  var T1 = 2.30;   // 加速段结束，进入峰值
+  var T2 = 2.70;   // 峰值保持结束，开始减速
+  var T3 = 3.40;   // 跃迁闪白（字面量事件时刻）
+  var T4 = 4.10;   // 跃迁后重新加速到巡航速度
+  var W1 = T1 - T0, W2 = T2 - T1, W3 = T3 - T2, W4 = T4 - T3;
+  var V1 = 5200;   // 峰值速度（世界深度单位 / 秒）
+  var V2 = 3800;   // 跃迁后的巡航速度（恒定 → 末帧是稳态巡航）
+
+  /* smoothstep 及其原函数：∫₀ᵁ (3u²-2u³)du = U³ - U⁴/2
+     —— 速度曲线用 smoothstep 是为了让 v(0)=v'(0)=0（起手真的静止），
+        且在各段边界导数为 0（加速度连续，不会一拐一拐）。 */
+  function ss(u) { return u * u * (3 - 2 * u); }
+  function Fs(u) { return u * u * u - 0.5 * u * u * u * u; }
+
+  /* 各段末端的累计位移（解析积分的分段常数，手算后写成字面量便于核对） */
+  var SA = V1 * W1 * 0.5;              // 5070   —— 加速段 ∫ = V1*W1*F(1)
+  var SB = SA + V1 * W2;               // 7150
+  var SC = SB + V1 * W3 * 0.5;         // 8970   —— 减速段 ∫(1-ss) = W3*(1-F(1))
+  var SD = SC + V2 * W4 * 0.5;         // 10300  —— 跃迁后加速段
+  /* 巡航段： S(t) = SD + V2*(t-T4)，末帧 t=4.9667 → S = 13597 */
+
+  /* v(t)：瞬时速度（只喂给仪表读数，不参与位置；位置只用 dist()） */
+  function vel(t) {
+    if (t <= T0) return 0;
+    if (t < T1) return V1 * ss((t - T0) / W1);
+    if (t < T2) return V1;
+    if (t < T3) return V1 * (1 - ss((t - T2) / W3));
+    if (t < T4) return V2 * ss((t - T3) / W4);
+    return V2;
+  }
+
+  /* S(t) = ∫₀ᵗ v(τ)dτ —— 分段闭式。这是「解析积分」的全部：
+     加速段 ∫ V1*ss(u)dt = V1*W1*F(u)；减速段 ∫ V1*(1-ss(u))dt = V1*W3*(u-F(u))。
+     关键：v 不是常数，所以绝不能写 z -= v(t)*t 或 z -= v*dt 的累加版本。 */
+  function dist(t) {
+    if (t <= T0) return 0;
+    if (t < T1) return V1 * W1 * Fs((t - T0) / W1);
+    if (t < T2) return SA + V1 * (t - T1);
+    if (t < T3) { var u = (t - T2) / W3; return SB + V1 * W3 * (u - Fs(u)); }
+    if (t < T4) return SC + V2 * W4 * Fs((t - T3) / W4);
+    return SD + V2 * (t - T4);
+  }
+
+  function span(t, a, b) { return b > a ? Math.min(1, Math.max(0, (t - a) / (b - a))) : (t >= b ? 1 : 0); }
+  function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
+  function hash(i) { var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123; return x - Math.floor(x); }
+
+  /* ---------- 星野几何 ---------- */
+  var N = 780;            // 星数
+  var ZN = 420, ZF = 3200;          // 近/远深度面
+  var RANGE = ZF - ZN;              // 2780 —— 取模周期
+  var FOC = 700;                    // 焦距： screen = world * FOC / z
+  var RHO = 880;                    // t=0 时星点所在的屏幕半径（面积均匀 → 星野均匀）
+  var DT = 0.042, K = 5;            // 解析拖尾：K 段，回看 K*DT 秒
+
+  var PH1 = new Float32Array(N), PH2 = new Float32Array(N);
+  var XW1 = new Float32Array(N), YW1 = new Float32Array(N);
+  var XW2 = new Float32Array(N), YW2 = new Float32Array(N);
+  var SZ = new Float32Array(N), BR = new Float32Array(N);
+  var CI = new Uint8Array(N);
+  var BUCK = new Uint8Array(N);
+  var RA = new Float32Array(N);
+  var U = new Float32Array((K + 1) * N);
+  var SXa = new Float32Array((K + 1) * N), SYa = new Float32Array((K + 1) * N);
+  var OKa = new Uint8Array((K + 1) * N);
+
+  /* 淡入/淡出：回绕瞬间星点必须已经在 alpha=0，否则会看到近处的大星
+     突然跳回中心的「爆点」。淡入只占相位的 2%（几何位移 <1.5%），
+     所以不会在中心掏出一个空洞；淡出占相位末段 14%。 */
+  var FI_LEN = 60;                       // u < 60 淡入
+  var FO0 = 0.86 * RANGE, FO1 = 1 / (RANGE - FO0);
+
+  /* alpha 档：第 0 档是**真的 0**，专给「正在回绕淡入/淡出」的星用。
+     分档是为了把 780 颗星 5 段拖尾压成十几个批量 stroke；但档位必须含 0，
+     否则回绕时那颗星会以最低档的 alpha（原来的 0.28）突然出现 —— 就是「爆点」。 */
+  var NCOL = 3, NAL = 5;
+  var COLS = ['#cfe0ff', '#8fd8ff', '#ffd2a0'];
+  var ALV = [0, 0.28, 0.46, 0.68, 0.95];
+  var WK = [0, 1.0, 0.60, 0.36, 0.20, 0.10];   // 每段的衰减（下标= k）
+  var LWK = [0, 1.75, 1.50, 1.25, 1.00, 0.78]; // 每段的线宽
+
+  /* 横向坐标由「t=0 时想要的屏幕半径 ρ0」反推： r_w = ρ0 * z0 / FOC。
+     ρ0 在半径 RHO 的圆盘内面积均匀（ρ0 = RHO*sqrt(h)）→ t=0 的星野在屏幕上
+     密度处处相等（若改成「世界圆盘均匀 + 深度均匀」，边缘会因为圆盘壁露出来
+     而变稀 —— 实测过，四角是空的）。
+     跃迁后的新星野用另一组 hash 通道做同样的事 → 闪白之后即是一张均匀新星图。 */
+  (function initSky() {
+    for (var i = 0; i < N; i++) {
+      PH1[i] = hash(i * 1.0) * RANGE;
+      PH2[i] = hash(i * 2.7 + 9.1) * RANGE;
+      var z01 = ZF - PH1[i], z02 = ZF - PH2[i];
+      var a1 = hash(i * 7.7 + 13.3) * TAU, r1 = RHO * Math.sqrt(hash(i * 3.0 + 1.0)) * z01 / FOC;
+      XW1[i] = CX + Math.cos(a1) * r1; YW1[i] = CY + Math.sin(a1) * r1;
+      var a2 = hash(i * 11.3 + 5.5) * TAU, r2 = RHO * Math.sqrt(hash(i * 5.9 + 21.1)) * z02 / FOC;
+      XW2[i] = CX + Math.cos(a2) * r2; YW2[i] = CY + Math.sin(a2) * r2;
+
+      var hb = hash(i * 13.7 + 4.4);
+      BR[i] = 0.34 + 0.66 * Math.pow(hb, 1.5);
+      var hc = hash(i * 17.9 + 3.3);
+      var ci = hc < 0.70 ? 0 : (hc < 0.90 ? 1 : 2);
+      var sz = 1.3 + 1.9 * hash(i * 23.1 + 7.7);
+      if (hash(i * 29.3 + 1.1) > 0.975) { sz *= 1.75; ci = hc < 0.5 ? 0 : 1; }
+      SZ[i] = sz;
+      CI[i] = ci;
+    }
+  })();
+
+  /* ---------- 每帧：纯解析求位置（零跨帧状态） ---------- */
+  function evalAt(t) {
+    var k, i, off;
+    for (k = 0; k <= K; k++) {
+      var tau = t - k * DT; if (tau < 0) tau = 0;
+      var is2 = tau >= T3;                       // 跃迁后 = 另一套相位/横向坐标
+      var d = dist(tau);
+      var D = is2 ? (d - SC) : d;                // 跃迁后从 SC 重新计里程
+      off = k * N;
+      var phA = is2 ? PH2 : PH1, xA = is2 ? XW2 : XW1, yA = is2 ? YW2 : YW1;
+      for (i = 0; i < N; i++) {
+        var u = (phA[i] + D) % RANGE;            // ← 取模回绕（不是累加、不是 reset）
+        var z = ZF - u;
+        var s = FOC / z;
+        U[off + i] = u;
+        SXa[off + i] = CX + (xA[i] - CX) * s;
+        SYa[off + i] = CY + (yA[i] - CY) * s;
+        var fi = u < FI_LEN ? u / FI_LEN : 1;
+        var fo = u > FO0 ? (RANGE - u) * FO1 : 1;
+        if (fo < 0) fo = 0;
+        if (k === 0) {
+          /* 回绕淡入/淡出真的作用到画面上：a 落进第 0 档（alpha=0）就一颗都不画。
+             档位每帧算一次（BUCK 不再是 load 时的常量），颜色 CI 仍固定。 */
+          var a = BR[i] * fi * fo;
+          BUCK[i] = CI[i] * NAL + (a < 0.02 ? 0 : a < 0.44 ? 1 : a < 0.60 ? 2 : a < 0.80 ? 3 : 4);
+          RA[i] = clamp(SZ[i] * s * 1.7, 0.5, 5.6);
+        }
+      }
+    }
+    /* 段有效性：跨跃迁的两段、以及跨回绕的那一段必须断开，
+       否则会画出一条从画面边缘横穿回中心的假拖尾。 */
+    for (k = 1; k <= K; k++) {
+      var b0 = k * N, p0 = (k - 1) * N;
+      if ((t - k * DT >= T3) !== (t - (k - 1) * DT >= T3)) {
+        for (i = 0; i < N; i++) OKa[b0 + i] = 0;
+        continue;
+      }
+      for (i = 0; i < N; i++) OKa[b0 + i] = U[b0 + i] < U[p0 + i] ? 1 : 0;
+    }
+  }
+
+  /* ---------- 画布 ---------- */
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var BGG = null, NEB = [], SPR = [];
+  var SPR_RGB = ['207,224,255', '143,216,255', '255,210,160'];
+
+  function buildArt() {
+    BGG = ctx.createRadialGradient(CX, CY, 0, CX, CY, 780);
+    BGG.addColorStop(0, '#0a1430');
+    BGG.addColorStop(0.45, '#050a1c');
+    BGG.addColorStop(1, '#02030a');
+    var nb = [
+      [286, 168, 430, '60,112,205', 0.055],
+      [1010, 566, 470, '122,74,190', 0.045],
+      [770, 124, 360, '44,140,184', 0.040]
+    ];
+    for (var i = 0; i < nb.length; i++) {
+      var g = ctx.createRadialGradient(nb[i][0], nb[i][1], 0, nb[i][0], nb[i][1], nb[i][2]);
+      g.addColorStop(0, 'rgba(' + nb[i][3] + ',' + nb[i][4] + ')');
+      g.addColorStop(1, 'rgba(' + nb[i][3] + ',0)');
+      NEB.push(g);
+    }
+    /* 星点用一次性预渲染的辉光贴图（load 时生成并缓存，不每帧重生成）：
+       直接 fill 一个等 alpha 的圆会得到「硬边盘子」，贴图才有真正的辉光衰减。 */
+    for (var c = 0; c < SPR_RGB.length; c++) {
+      var sp = document.createElement('canvas');
+      sp.width = 64; sp.height = 64;
+      var sc = sp.getContext('2d');
+      var sg = sc.createRadialGradient(32, 32, 0, 32, 32, 32);
+      var rgb = SPR_RGB[c];
+      sg.addColorStop(0.00, 'rgba(' + rgb + ',1)');
+      sg.addColorStop(0.45, 'rgba(' + rgb + ',0.92)');
+      sg.addColorStop(0.62, 'rgba(' + rgb + ',0.30)');
+      sg.addColorStop(0.82, 'rgba(' + rgb + ',0.055)');
+      sg.addColorStop(1.00, 'rgba(' + rgb + ',0)');
+      sc.fillStyle = sg; sc.fillRect(0, 0, 64, 64);
+      SPR.push(sp);
+    }
+  }
+
+  function drawBG() {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = BGG; ctx.fillRect(0, 0, W, H);
+    for (var i = 0; i < NEB.length; i++) { ctx.fillStyle = NEB[i]; ctx.fillRect(0, 0, W, H); }
+  }
+
+  function drawStars() {
+    var k, i, b, b0, p0, wk, ci, lv;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+
+    /* 解析式拖尾：第 k 段 = 星在 (t-(k-1)DT) 与 (t-kDT) 两个解析位置之间的线段。
+       —— 没有一处读写「上一帧」。 */
+    for (k = 1; k <= K; k++) {
+      wk = WK[k];
+      ctx.lineWidth = LWK[k];
+      b0 = k * N; p0 = (k - 1) * N;
+      for (ci = 0; ci < NCOL; ci++) {
+        for (lv = 1; lv < NAL; lv++) {            // lv=0 = alpha 0（回绕中），整批跳过
+          b = ci * NAL + lv;
+          ctx.globalAlpha = ALV[lv] * wk;
+          ctx.strokeStyle = COLS[ci];
+          ctx.beginPath();
+          for (i = 0; i < N; i++) {
+            if (BUCK[i] !== b || !OKa[b0 + i]) continue;
+            ctx.moveTo(SXa[p0 + i], SYa[p0 + i]);
+            ctx.lineTo(SXa[b0 + i], SYa[b0 + i]);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+
+    /* 头部星光：预渲染辉光贴图，半尺寸 = 2*RA，核心直径约等于 RA。
+       分档只为批量 —— 每一档一次 drawImage 循环，780 颗星共 12 次。 */
+    for (ci = 0; ci < NCOL; ci++) {
+      for (lv = 1; lv < NAL; lv++) {
+        b = ci * NAL + lv;
+        ctx.globalAlpha = ALV[lv];
+        var spr = SPR[ci];
+        for (i = 0; i < N; i++) {
+          if (BUCK[i] !== b) continue;
+          var R = RA[i] * 2.0;
+          ctx.drawImage(spr, SXa[i] - R, SYa[i] - R, R + R, R + R);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /* 跃迁闪白：T3 是字面量事件时刻，前 0.05s 起亮、后 0.30s 衰减 */
+  function drawFlash(t) {
+    var fl = t < T3 ? span(t, T3 - 0.05, T3) : (1 - span(t, T3, T3 + 0.30));
+    var fa = fl * fl;
+    if (fa <= 0.003) return;
+    var g = ctx.createRadialGradient(CX, CY, 0, CX, CY, 830);
+    g.addColorStop(0, 'rgba(255,255,255,' + fa.toFixed(4) + ')');
+    g.addColorStop(0.55, 'rgba(228,240,255,' + fa.toFixed(4) + ')');
+    g.addColorStop(1, 'rgba(150,192,255,' + fa.toFixed(4) + ')');
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  /* 场景内仪表：速度表的数字与格数都从同一个 v(t) 派生，阶段文案也来自 t，
+     两者不可能各说各话。 */
+  var PH_CN = ['静止', '加速', '峰值', '减速', '跃迁', '巡航'];
+  var PH_EN = ['STILL', 'ACCEL', 'PEAK', 'DECEL', 'JUMP', 'CRUISE'];
+  var PH_C = ['#5c7492', '#8fd8ff', '#e9f2ff', '#ffb46a', '#ffffff', '#8fd8ff'];
+
+  function drawHUD(t) {
+    var i;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.fillStyle = '#e9f2ff';
+    ctx.font = '800 44px "Noto Sans CJK SC", system-ui, sans-serif';
+    ctx.fillText('星空穿梭', 64, 104);
+
+    ctx.fillStyle = '#6c86a8';
+    ctx.font = '500 12px "Noto Sans Mono CJK SC", monospace';
+    ctx.fillText('STARFIELD WARP / ANALYTIC PHASE INTEGRAL', 64, 128);
+
+    /* 速度表 */
+    var vv = vel(t);
+    var prog = clamp(vv / V1, 0, 1);
+    ctx.fillStyle = '#6c86a8';
+    ctx.font = '500 11px "Noto Sans Mono CJK SC", monospace';
+    ctx.fillText('跃迁速度 VELOCITY  ×10³ u/s', 64, 618);
+    var SEG = 18, sw = 15, sh = 9, y = 628, x0 = 64;
+    var lit = Math.round(prog * SEG);
+    for (i = 0; i < SEG; i++) {
+      ctx.fillStyle = i < lit ? '#8fd8ff' : '#172440';
+      ctx.fillRect(x0 + i * (sw + 3), y, sw, sh);
+    }
+    ctx.fillStyle = '#cfe0f2';
+    ctx.font = '600 16px "Noto Sans Mono CJK SC", monospace';
+    ctx.fillText((vv / 1000).toFixed(2), x0 + SEG * (sw + 3) + 14, 638);
+
+    /* 阶段 */
+    var pi = t < T0 ? 0 : t < T1 ? 1 : t < T2 ? 2 : t < T3 ? 3 : t < T4 ? 4 : 5;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = PH_C[pi];
+    ctx.font = '800 24px "Noto Sans CJK SC", system-ui, sans-serif';
+    ctx.fillText(PH_CN[pi], 1216, 626);
+    ctx.fillStyle = '#6c86a8';
+    ctx.font = '500 11px "Noto Sans Mono CJK SC", monospace';
+    ctx.fillText(PH_EN[pi], 1216, 648);
+    ctx.textAlign = 'left';
+  }
+
+  window.reelDraw = function (t) {
+    evalAt(t);
+    drawBG();
+    drawStars();
+    drawFlash(t);
+    drawHUD(t);
+  };
+
+  buildArt();
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>

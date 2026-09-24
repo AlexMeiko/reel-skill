@@ -3,3 +3,9 @@ reel-out/
 .reel-progress.json
 .reel-preview.png
 *.mp4
+.workbuddy/
+.future/
+.verify.json
+.verify-a/
+.verify-b/
+.verify-c/

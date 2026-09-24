@@ -1,0 +1,284 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 16 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：A 类 —— 机制与配色无关 —— 改颜色常量即可，机制一行不用动。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>数字滚动 · 主方案（逐位解析式 + 一次写值）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #080a0c; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #101418;
+    color: #f6ecd8;
+    font-family: "Noto Sans CJK SC", system-ui, sans-serif;
+  }
+  .panel {
+    position: absolute; left: 64px; top: 64px; width: 1152px; height: 592px;
+    box-sizing: border-box;
+    background: linear-gradient(180deg, #1d242b 0%, #171d23 62%, #131920 100%);
+    border: 1px solid rgba(255,255,255,.10);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.07), 0 18px 44px rgba(0,0,0,.45);
+  }
+  .panel::before {
+    content: ""; position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+    background-image: repeating-linear-gradient(90deg, rgba(255,255,255,.016) 0 1px, rgba(255,255,255,0) 1px 5px);
+  }
+  .head {
+    position: absolute; left: 104px; top: 100px; width: 1072px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .kicker { font-size: 19px; letter-spacing: .16em; color: #93a0aa; }
+  .kicker i { font-style: normal; color: #5d6870; margin: 0 .45em; }
+  .status { display: flex; align-items: center; font-family: "Noto Sans Mono CJK SC", monospace;
+            font-size: 18px; letter-spacing: .18em; color: #e6a33c; }
+  .dot { width: 9px; height: 9px; margin-right: 11px; background: #e6a33c; border-radius: 50%; }
+  .label {
+    position: absolute; left: 0; top: 158px; width: 1280px; text-align: center;
+    font-size: 25px; letter-spacing: .12em; color: #cbd3d8;
+  }
+  .odo {
+    position: absolute; left: 0; top: 206px; width: 1280px; height: 224px;
+    display: flex; justify-content: center; align-items: center;
+  }
+  .wheel { position: relative; overflow: hidden; background: #0b0e11;
+           box-shadow: inset 0 0 0 1px rgba(255,255,255,.055); }
+  .strip { position: absolute; left: 0; top: 0; width: 100%; }
+  .cell {
+    text-align: center;
+    font-family: "Noto Sans Mono CJK SC", monospace;
+    color: #f8efdd;
+  }
+  .veil {
+    position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none;
+    background: linear-gradient(180deg,
+      rgba(11,14,17,.97) 0%, rgba(11,14,17,.70) 7%, rgba(11,14,17,0) 26%,
+      rgba(11,14,17,0) 74%, rgba(11,14,17,.70) 93%, rgba(11,14,17,.97) 100%);
+  }
+  .unit { margin-left: 26px; font-size: 34px; letter-spacing: .06em; color: #e6a33c; }
+  .bar {
+    position: absolute; left: 360px; top: 476px; width: 560px; height: 10px;
+    background: rgba(255,255,255,.10);
+  }
+  .fill { position: absolute; left: 0; top: 0; width: 0; height: 10px;
+          background: linear-gradient(90deg, #a3680f 0%, #e6a33c 100%); }
+  .cap  { position: absolute; top: -4px; width: 3px; height: 18px; margin-left: -1px;
+          background: #ffd28a; box-shadow: 0 0 9px rgba(255,210,138,.65); }
+  .barcap {
+    position: absolute; left: 360px; top: 498px; width: 560px;
+    display: flex; justify-content: space-between; font-size: 19px; color: #8b949c;
+  }
+  .pct { font-family: "Noto Sans Mono CJK SC", monospace; font-size: 19px; color: #e6a33c; }
+  .foot { position: absolute; left: 104px; top: 592px; font-size: 18px;
+          letter-spacing: .10em; color: #7d868e; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="panel"></div>
+  <div class="head">
+    <div class="kicker">特效 05 <i>/</i> 数字滚动 · 里程表</div>
+    <div class="status" id="status"><span class="dot"></span><span id="statustext">COUNTING</span></div>
+  </div>
+  <div class="label">本季度新增装机</div>
+  <div class="odo" id="odo"><div class="unit" id="unit">万台</div></div>
+  <div class="bar"><div class="fill" id="fill"></div><div class="cap" id="cap"></div></div>
+  <div class="barcap">
+    <span id="captext">目标 128 万台</span>
+    <span class="pct" id="pct">0%</span>
+  </div>
+  <div class="foot">逐位错峰 · 低位先停 · 三级回弹落位收束</div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  /* 时间原语的兜底：capture 会注入 kit（window.reel），这里保证直接打开也能渲染 */
+  var R = (typeof reel !== "undefined" && reel) ? reel : {
+    span: function (t, a, b) {
+      if (!(b > a)) return t >= b ? 1 : 0;
+      var x = (t - a) / (b - a);
+      return x < 0 ? 0 : (x > 1 ? 1 : x);
+    },
+    clamp: function (x, a, b) { return x < a ? a : (x > b ? b : x); }
+  };
+
+  /* ---------- 内容与时间轴 ----------
+     三方案共用同一套骨架（SPEC 要求）：
+       0.00–0.30  静态起手（完整壳，三窗 000）
+       0.30–3.60  滚动 + 落位回弹（3.30s，占全片 66%）
+       3.60–4.20  微动收束（二级极轻落位，落定后仍有可读位移）
+       4.20–5.00  定格（0.80s）                                        */
+  var VALUE = 128;                       // 目标值
+  var D     = 3;                         // 位数
+  var EP    = [2.6, 3.0, 3.4];           // 每位自己的滚动曲线指数（中段速度 = tgt·p/dur）
+  var T0    = 0.30;                      // 最低位起滚
+  var STEP  = 0.90;                      // 逐位错峰步进（三段相邻重叠 0.38s，不再挤在一起）
+  var DUR   = 1.28;                      // 每位的滚动时长
+  /* 最高位落定时刻 = 条满格 = 状态转「达成」，由前三个常量推出，不另立字面量（§7.6 第 3 条） */
+  var T_LAND = T0 + (D - 1) * STEP + DUR;   // = 3.38
+  var T_SNAP1 = T_LAND + 0.22;           // 一级回弹（整体「咔」）结束 = 3.60
+  var T_FREEZE = 4.20;                   // 从此定格
+  /* 微动收束段 3.60–4.20：三位按相位差依次「沉一下再回位」。
+     用单调的 sin(π·p) 而不是衰减振荡——振荡的峰正好落在采样点之间，
+     单调鼓包则在整段里都保持可读位移，且两端严格为 0。 */
+  var T_MIC_A0 = T_SNAP1;                  // 微动收束起点 = 3.60
+  var MIC_DELAY = 0.10, MIC_SPAN = 0.40;   // 最高位 3.80+0.40 = 4.20，正好收在定格前
+  var MIC_A = [7, 9.5, 12];              // 三位各自的收束幅度(px)
+
+  /* ---------- 几何（唯一的几何真值来源，CSS 里的尺寸也从这里写出去） ---------- */
+  var W = 112, H = 150, WIN = 224;       // 轮宽 / 每格高 / 窗口高（1.493H → 上下各露 37px 邻位）
+
+  /* 滚轮纸带：索引 0 是「绕回来的 9」，1..10 是 0..9，11/12 是绕出去的 0/1。
+     13 格让 9→0 的进位在视觉上连续（见 README §2）。 */
+  var STRIP = ["9"];
+  for (var s = 0; s < 10; s++) STRIP.push(String(s));
+  STRIP.push("0"); STRIP.push("1");
+
+  function digitAt(d) { return Math.floor(VALUE / Math.pow(10, d)) % 10; }
+
+  /* 滚动曲线：先加速、中段最快、再刹车（不是全程 easeOut）。
+     对称幂曲线，u=0.5 处速度最大；p 越大中段越快、两头越慢。
+     速度在 u=0.5 两侧解析式同为 p·1^(p-1)，所以连续无折点。 */
+  function rollProg(u, p) {
+    if (u <= 0) return 0;
+    if (u >= 1) return 1;
+    return u < 0.5
+      ? 0.5 * Math.pow(2 * u, p)
+      : 1 - 0.5 * Math.pow(2 - 2 * u, p);
+  }
+
+  var odoEl = document.getElementById("odo");
+  var unitEl = document.getElementById("unit");
+  var fillEl = document.getElementById("fill");
+  var capEl  = document.getElementById("cap");
+  var pctEl  = document.getElementById("pct");
+  var statusEl = document.getElementById("statustext");
+  var capTextEl = document.getElementById("captext");
+  var wheels = [];
+
+  (function build() {
+    var frag = document.createDocumentFragment();
+    /* 倒序 append：DOM 从左到右必须是「百位 → 十位 → 个位」，但 wheels[d] 仍按位号索引 */
+    for (var d = D - 1; d >= 0; d--) {
+      var win = document.createElement("div");
+      win.className = "wheel";
+      win.style.width = W + "px";
+      win.style.height = WIN + "px";
+      win.style.margin = "0 9px";
+      var strip = document.createElement("div");
+      strip.className = "strip";
+      for (var c = 0; c < STRIP.length; c++) {
+        var cell = document.createElement("div");
+        cell.className = "cell";
+        cell.style.height = H + "px";
+        cell.style.lineHeight = H + "px";
+        cell.style.fontSize = "112px";
+        cell.textContent = STRIP[c];
+        strip.appendChild(cell);
+      }
+      var veil = document.createElement("div");
+      veil.className = "veil";
+      win.appendChild(strip);
+      win.appendChild(veil);
+      frag.appendChild(win);
+      wheels[d] = { win: win, strip: strip };
+    }
+    odoEl.insertBefore(frag, unitEl);
+  })();
+
+  /* 连续值 v（0..10）→ 纸带的 translateY。把「第 floor(v)%10 位」那一格
+     正中对准窗口中心，上下各露出 (WIN-H)/2 = 37px 的邻位。 */
+  var CI0 = (WIN - H) / 2;
+  function stripY(v) {
+    var f = Math.floor(v);
+    var frac = v - f;
+    return -(((f % 10) + 1) * H + frac * H - CI0);
+  }
+
+  /* 该位此刻的解析速度（位/秒）：对 v = tgt·rollProg(u,p) 求导，用来算运动模糊量。 */
+  function wheelVel(d, t) {
+    var tgt = digitAt(d), a = T0 + d * STEP, b = a + DUR, p = EP[d];
+    if (t <= a || t >= b) return 0;
+    var u = (t - a) / (b - a);
+    /* rollProg 的导数在 u=0.5 处两侧同值（p·1^(p-1)），所以速度连续、无折点 */
+    var dv = u < 0.5 ? p * Math.pow(2 * u, p - 1) : p * Math.pow(2 - 2 * u, p - 1);
+    return tgt * dv / (b - a);
+  }
+
+  /* 衰减正弦：A=初始振幅(px)，k=衰减速率，w=振荡角频率。
+     首尾都为 0（sin(0)=0，且 u>=1 强制归零），所以叠加不会切断。 */
+  function damped(u, A, k, w) {
+    return u >= 1 ? 0 : A * Math.exp(-k * u) * Math.sin(w * u);
+  }
+
+  window.reelDraw = function (t) {
+    var num = 0;                                  // 唯一的数值真值来源（连续值）
+    for (var d = 0; d < D; d++) {
+      var wl = wheels[d];
+      var tgt = digitAt(d);
+      var u = R.span(t, T0 + d * STEP, T0 + d * STEP + DUR);
+      var v = tgt * rollProg(u, EP[d]);            // 位 d 的连续值
+      num += v * Math.pow(10, d);
+
+      /* 两级回弹 + 滚动位移：先在同一个表达式里合成，再写一次。
+         一级 = 该位自己的落位轻响；二级 = 整体「咔」；三级 = 收束段的极轻二次落位。
+         三级都锚在同一套时间常量上，振幅都作用在同一个 y 上（§7.6 第 3 条：不另立时刻） */
+      var land_d = T0 + d * STEP + DUR;
+      var p1 = R.span(t, land_d, land_d + 0.26);
+      var q1 = R.span(t, T_LAND, T_SNAP1);
+      /* 三级回弹都由同一套时间常量派生，振幅都加在同一个 y 上，最后只写一次。
+         收束段（3.60–4.20）三位按 0.14s 依次「咔」一下落定：峰值约 12px，
+         是看得见的机械位移，但不足以改变任何一位的读数。 */
+      var mic0 = T_MIC_A0 + d * MIC_DELAY;
+      var p = R.clamp((t - mic0) / MIC_SPAN, 0, 1);
+      var mic = MIC_A[d] * Math.sin(Math.PI * p);   // 单调鼓包：两端为 0，中点最大
+      var y = stripY(v)
+            + damped(p1, 2.0, 8, 30)
+            + damped(q1, 5.0, 9, 52)
+            + mic;
+      wl.strip.style.transform = "translateY(" + y.toFixed(2) + "px)";
+
+      var bl = Math.min(2.6, wheelVel(d, t) * 0.10);   // 速度越高越糊，量级很小
+      wl.strip.style.filter = bl > 0.12 ? "blur(" + bl.toFixed(2) + "px)" : "none";
+    }
+
+    /* ---------- 场景内仪表：一个 prog 决定所有读数 ----------
+       prog 就是条宽；百分比、状态文案、副标题全部从同一个 prog 派生，
+       所以不可能出现「条已满格而文案仍是进行态」。prog 到 1 的时刻 = 最高位落位 = T_LAND，
+       与轮子的落位是同一件事，不存在第二个结束时刻。
+       未达成时把显示量夹到 0.99：条最多 554.4px、文本最多 99%，于是「满格」与
+       「达成」永远同时发生——最后 1% 在落位那一刻随机械回弹一起「咔」上去。 */
+    var prog = R.clamp(num / VALUE, 0, 1);
+    var done = prog >= 1;
+    var shown = done ? 1 : Math.min(prog, 0.99);
+    fillEl.style.width = (shown * 560).toFixed(3) + "px";
+    capEl.style.left = (shown * 560).toFixed(3) + "px";
+    pctEl.textContent = Math.round(shown * 100) + "%";
+    statusEl.textContent = done ? "TARGET MET" : (prog > 0.90 ? "SETTLING" : "COUNTING");
+    capTextEl.textContent = done ? "达成 128 / 目标 128 万台" : "目标 128 万台";
+
+    /* 单位随十位落位后淡入（先占位，避免布局跳动） */
+    var uu = R.span(t, 2.35, 2.85);
+    unitEl.style.opacity = uu.toFixed(3);
+    unitEl.style.transform = "translateX(" + (-9 + 9 * uu).toFixed(2) + "px)";
+
+    /* 定格段允许的「极轻呼吸」：满格条的端点游标，1.7s 一次，只改亮度 */
+    var cap = 1;
+    if (t >= T_FREEZE) cap = 0.52 + 0.48 * (0.5 + 0.5 * Math.sin(2 * Math.PI * (t - T_FREEZE) / 1.70));
+    capEl.style.opacity = cap.toFixed(3);
+  };
+})();
+</script>
+</body>
+</html>

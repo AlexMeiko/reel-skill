@@ -1,0 +1,435 @@
+<!doctype html>
+<!--
+  配色说明：本文件硬编码了 22 个颜色，是演示这套机制时搭的一套配色。
+  配色由使用者按题材决定 —— 沿用或整套换掉都行，机制不受影响。
+  分类：C 类 —— 机制依赖色相关系，换色时保留相应的通道关系即可，其余照换。
+  哪些会随明度变、哪些不会：见 ../THEMING.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>VHS 磁带失真 · 主方案（逐扫描线闭式位移 + RGB 三通道独立位移）</title>
+<script>
+  window.REEL = { duration: 5, fps: 30, width: 1280, height: 720 };
+</script>
+<style>
+  html, body { margin: 0; background: #05070c; }
+  .stage {
+    position: relative;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: #05070c;
+    font-family: system-ui, "Noto Sans CJK SC", "Noto Sans Mono CJK SC", sans-serif;
+  }
+  /* 整幅画面（含 HUD 文字）都画进这一张 canvas：
+     没有 DOM 文本 → 不踩 Chromium 字形缓存栅格化的 1/255 抖动；
+     没有合成层 → 同一 t 两次截帧逐字节一致。 */
+  #v { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; display: block; }
+</style>
+</head>
+<body>
+<div class="stage"><canvas id="v" width="1280" height="720"></canvas></div>
+<script>
+(function () {
+  /* =====================================================================
+     VHS 磁带失真 = f(t)
+
+     核心命题：逐扫描线的水平位移是**闭式**的
+         dx(y,t) = J(y,t) + H(y,t) + K(y,t)
+               J = 基础抖动   （逐行、18Hz 时间量子）
+               H = 磁头噪声带 （取模相位滚动的 16px 带内逐行大幅位移）
+               K = 偶发跳变   （字面量节拍表包络 → 逐行踢 + 整条撕裂带同向跳）
+     三项都只依赖 (y, t)：没有 dx += …，没有上一帧，没有跨帧状态。
+
+     三通道（R / G / B）各自独立位移，用 canvas 的 'lighter'（= screen 加色）
+     合成 —— 等价于 SPEC 里的 mix-blend-mode: screen，但可以逐扫描线 seek。
+     ===================================================================== */
+
+  var REEL = window.REEL;
+  var W = REEL.width, H = REEL.height, FPS = REEL.fps;
+  var FRAMES = Math.round(REEL.duration * FPS);
+
+  /* ---------- 可调常量（全部字面量） ---------- */
+  var QHZ     = 18;      // 时间量子频率 Hz：≠30fps，不会退化成逐帧噪声
+  var DXMAX   = 34;      // 位移归一化尺度，用于「色散随位移同向放大」
+  var AJ      = 2.4;     // J 基础抖动振幅 px
+  var BH      = 16;      // H 磁头噪声带高度 px
+  var BSPEED  = 240;     // H 带滚动速度 px/s
+  var BPERIOD = 780;     // H 取模周期 = 720 + 60（进/出都在画面外，换圈无缝）
+  var BOFF    = -60;     // H 相位零点
+  var AH      = 30;      // H 带内逐行位移振幅 px
+  var AK      = 12;      // K 逐行踢振幅 px
+  var AJUMP   = 46;      // K 整条撕裂带同向跳振幅 px
+  var CA0     = 1.7;     // 静态色差（t=0 的「略带色差」就是它）
+  var CAG0    = 5.5;     // 色差随位移同向增长的系数
+  var CAG1    = 9.0;     // 失同步时色差额外放大量（SPEC：色差放大 3 倍）
+
+  /* ---------- 磁迹丢失节拍表（字面量；含两对密集双发） ----------
+     z = [撕裂带首行, 末行)，d = 该带整条同向跳的符号。
+     发作时刻 1.26 / 1.34 / 2.70 / 3.85 / 4.40 / 4.46
+     → 可辨识节点 4 个（1.26+1.34、2.70、3.85、4.40+4.46）
+     最后一次在 4.46+0.16 = 4.62 结束，末帧 4.967 处已经干净。 */
+  var BEATS = [
+    { t: 1.26, w: 0.14, a: 0.72, z: [ 96, 268], d:  1 },
+    { t: 1.34, w: 0.12, a: 0.95, z: [380, 520], d: -1 },
+    { t: 2.70, w: 0.20, a: 0.85, z: [108, 660], d:  1 },
+    { t: 3.85, w: 0.16, a: 0.62, z: [300, 452], d: -1 },
+    { t: 4.40, w: 0.14, a: 0.88, z: [ 60, 240], d:  1 },
+    { t: 4.46, w: 0.16, a: 1.00, z: [430, 690], d: -1 }
+  ];
+
+  /* ---------- 确定性伪随机 ---------- */
+  function hash(i) {
+    var x = Math.sin(i * 127.1 + 311.7) * 43758.5453123;
+    return x - Math.floor(x);
+  }
+  function clamp(x, a, b) { return x < a ? a : (x > b ? b : x); }
+  function span(t, t0, t1) { return t1 > t0 ? clamp((t - t0) / (t1 - t0), 0, 1) : (t >= t1 ? 1 : 0); }
+
+  /* 发作包络：瞬时起振（0.03s≈一帧）→ 平台 → 二次衰减。纯 t 的函数。 */
+  function envAt(t, b) {
+    var d = t - b.t;
+    if (d < 0 || d > b.w) return 0;
+    var atk = 0.03, hold = b.w * 0.45;
+    if (d <= atk) return b.a * (d / atk);
+    if (d <= hold) return b.a;
+    var u = (d - hold) / (b.w - hold);
+    return b.a * (1 - u) * (1 - u);
+  }
+
+  /* ---------- 闭式三项 ---------- */
+  /* J 基础抖动：每条扫描线一个只属于它的随机相位，随 18Hz 量子整体换一次。
+     视觉职责：让整幅画面「毛」起来 —— VHS 的底色噪声，也是「这不是数码图」的第一眼信号。
+     它是逐行独立的，所以画面不会整块平移，而是像被细齿梳过。 */
+  function termJ(y, q, ramp) {
+    return AJ * ramp * (2 * hash(y * 1.0 + q * 13.7) - 1);
+  }
+  /* H 磁头噪声带：位置由取模相位给出（不累加），带内每条线再各抖一次。
+     视觉职责：一条 16px 高、持续向下滚动的噪声带 —— 磁头切换瞬间的失同步。
+     它是「本片在动」的持续证据（整段都在滚），也是失真的节奏底噪。 */
+  function termH(y, bp, q) {
+    if (y < bp || y >= bp + BH) return 0;          // 硬边窗：带上/带下 1 行内跳变
+    return AH * (2 * hash(y * 2.3 + q * 5.1) - 1);
+  }
+  /* K 偶发跳变：节拍包络 ×（逐行踢 + 撕裂带同向跳）。
+     视觉职责：真正的「磁迹丢失」事件 —— 画面被横向撕开并短暂失去同步。
+     区别于 J：J 是常在的细抖，K 是字面量时刻上的、成对密集的、有节奏的爆发。 */
+  function termK(y, q, E) {
+    var s = 0;
+    for (var i = 0; i < BEATS.length; i++) {
+      var e = E[i];
+      if (e <= 0) continue;
+      var b = BEATS[i];
+      var inZone = (y >= b.z[0] && y < b.z[1]) ? 1 : 0;
+      s += e * (AK * (2 * hash(y * 4.7 + i * 9.1 + q * 2.3) - 1) + AJUMP * b.d * inZone);
+    }
+    return s;
+  }
+
+  /* ---------- 确定性噪点图（load 时生成一次，之后只引用） ---------- */
+  function mkCanvas(w, h) {
+    var c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    return c;
+  }
+  function mkGrain(w, h, seed, a0, a1) {
+    var c = mkCanvas(w, h), g = c.getContext("2d");
+    var img = g.createImageData(w, h), d = img.data;
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var i = (y * w + x) * 4;
+        var v = hash(x * 1.7 + y * 57.3 + seed * 911.1);
+        var lum = 26 + Math.floor(v * 210);
+        d[i] = lum; d[i + 1] = lum; d[i + 2] = lum;
+        d[i + 3] = Math.floor(255 * (a0 + (a1 - a0) * v));
+      }
+    }
+    g.putImageData(img, 0, 0);
+    return c;
+  }
+  function mkBand(w, h, seed) {
+    var c = mkCanvas(w, h), g = c.getContext("2d");
+    var img = g.createImageData(w, h), d = img.data;
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var i = (y * w + x) * 4;
+        /* 两级噪声：7px 粗块（磁带的横向拖尾）+ 细粒（颗粒感）。
+           只用细粒会变成「彩色雪花」，横条拖尾才是磁头噪声的辨识特征。 */
+        var v = 0.74 * hash(Math.floor(x / 7) * 13.1 + y * 91.7 + seed * 577.3)
+              + 0.26 * hash(x * 1.9 + y * 37.3 + seed * 131.7);
+        var g0;
+        if (y < 2) g0 = 232 + Math.floor(v * 23);            // 前两行：磁头切换白线
+        else if (v < 0.52) g0 = 6 + Math.floor(v * 70);       // 暗块
+        else g0 = 150 + Math.floor((v - 0.52) * 215);         // 亮块
+        d[i] = g0; d[i + 1] = g0; d[i + 2] = g0;
+        d[i + 3] = (v < 0.06 && y >= 2) ? 90 : 246;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    return c;
+  }
+  var GRAIN = [], BANDT = [];
+  (function buildNoise() {
+    for (var k = 0; k < 8; k++) {
+      GRAIN.push(mkGrain(320, 180, k + 1, 0.05, 0.55));   // 4× 放大的粗颗粒，像磁带
+      BANDT.push(mkBand(W, BH, k + 1));
+    }
+  })();
+
+  /* ---------- 静态底图：一帧都不动的部分（load 时画一次） ---------- */
+  var HORIZON = 452;
+  var MONO = '"Noto Sans Mono CJK SC", ui-monospace, monospace';
+  var SANS = 'system-ui, "Noto Sans CJK SC", sans-serif';
+  function font(weight, px, mono) { return weight + " " + px + "px " + (mono ? MONO : SANS); }
+
+  var BG = mkCanvas(W, H);
+  (function drawBG() {
+    var g = BG.getContext("2d");
+
+    var sky = g.createLinearGradient(0, 0, 0, HORIZON);
+    sky.addColorStop(0.00, "#0a1124");
+    sky.addColorStop(0.38, "#232049");
+    sky.addColorStop(0.66, "#5d3552");
+    sky.addColorStop(0.86, "#b06a3c");
+    sky.addColorStop(1.00, "#e5a04a");
+    g.fillStyle = sky; g.fillRect(0, 0, W, HORIZON);
+
+    /* 星点：确定性、位置写死为 hash(i) 的派生量 */
+    for (var i = 0; i < 90; i++) {
+      var sx = hash(i * 3.1 + 1.7) * W;
+      var sy = hash(i * 7.7 + 4.3) * 236;
+      var sa = 0.10 + 0.48 * hash(i * 11.3 + 9.1);
+      g.fillStyle = "rgba(222,234,255," + sa.toFixed(3) + ")";
+      var sr = hash(i * 13.9 + 2.2) > 0.88 ? 2.2 : 1.5;
+      g.fillRect(sx, sy, sr, sr);
+    }
+
+    /* 落日 + 光晕 */
+    var sunX = 944, sunY = 348, sunR = 76;
+    var glow = g.createRadialGradient(sunX, sunY, 4, sunX, sunY, sunR * 3.6);
+    glow.addColorStop(0.00, "rgba(255,214,150,.50)");
+    glow.addColorStop(0.32, "rgba(236,146,68,.20)");
+    glow.addColorStop(1.00, "rgba(236,146,68,0)");
+    g.fillStyle = glow; g.fillRect(0, 0, W, HORIZON);
+    var sg = g.createLinearGradient(0, sunY - sunR, 0, sunY + sunR);
+    sg.addColorStop(0, "#ffe8bd"); sg.addColorStop(1, "#ef9f42");
+    g.fillStyle = sg;
+    g.beginPath(); g.arc(sunX, sunY, sunR, 0, 6.2832); g.fill();
+
+    /* 远山 */
+    var FAR = [[-40, 452], [130, 386], [300, 414], [468, 344], [640, 406],
+               [824, 366], [982, 412], [1152, 374], [1320, 452]];
+    g.fillStyle = "#141d33";
+    g.beginPath(); g.moveTo(FAR[0][0], FAR[0][1]);
+    for (i = 1; i < FAR.length; i++) g.lineTo(FAR[i][0], FAR[i][1]);
+    g.closePath(); g.fill();
+
+    /* 近山（更暗，压住太阳下缘，做出「落日沉到山后」） */
+    var NEAR = [[-40, 452], [96, 430], [246, 452], [366, 402], [524, 446],
+                [706, 388], [862, 442], [1012, 416], [1186, 452], [1320, 452]];
+    g.fillStyle = "#0a1220";
+    g.beginPath(); g.moveTo(NEAR[0][0], NEAR[0][1]);
+    for (i = 1; i < NEAR.length; i++) g.lineTo(NEAR[i][0], NEAR[i][1]);
+    g.closePath(); g.fill();
+
+    /* 天线塔剪影：给画面一根竖线，横向位移一眼可读 */
+    g.fillStyle = "#080f1c";
+    g.fillRect(1126, 190, 3, 262);
+    for (i = 0; i < 12; i++) {
+      var ty = 198 + i * 22, th = 3 + i * 1.35;
+      g.fillRect(1127 - th, ty, th * 2, 1.4);
+    }
+
+    /* 海面 */
+    var wat = g.createLinearGradient(0, HORIZON, 0, H);
+    wat.addColorStop(0.00, "#123043");
+    wat.addColorStop(0.30, "#0c2130");
+    wat.addColorStop(1.00, "#050c15");
+    g.fillStyle = wat; g.fillRect(0, HORIZON, W, H - HORIZON);
+    g.fillStyle = "rgba(255,196,120,.42)";
+    g.fillRect(0, HORIZON - 1, W, 1.5);
+
+    /* 太阳在水面的碎光 */
+    for (i = 0; i < 46; i++) {
+      var u = i / 46;
+      var yy = HORIZON + 5 + u * u * 246;
+      var ww = (52 + 268 * hash(i * 3.3 + 2.1)) * (1 - 0.48 * u);
+      var xx = sunX + (hash(i * 7.1 + 5.5) - 0.5) * 156 * (0.35 + u);
+      g.fillStyle = "rgba(242,168,74," + (0.30 * (1 - u)).toFixed(3) + ")";
+      g.fillRect(xx - ww / 2, yy, ww, 1 + u * 2.2);
+    }
+
+    /* CRT 扫描线：静态纹理，只画一次；它会随 SRC 一起被逐行位移（本来就是一体的） */
+    g.fillStyle = "rgba(0,0,0,.16)";
+    for (i = 0; i < H; i += 3) g.fillRect(0, i, W, 1);
+
+    /* 暗角 */
+    var vg = g.createRadialGradient(W * 0.5, H * 0.46, 150, W * 0.5, H * 0.46, 830);
+    vg.addColorStop(0.00, "rgba(0,0,0,0)");
+    vg.addColorStop(0.62, "rgba(0,0,0,.14)");
+    vg.addColorStop(1.00, "rgba(0,0,0,.62)");
+    g.fillStyle = vg; g.fillRect(0, 0, W, H);
+
+    /* ---- 构图文字（也在 SRC 里，会一起被撕） ---- */
+    g.fillStyle = "#f2a044";
+    g.fillRect(88, 272, 232, 3);
+
+    g.textAlign = "left"; g.textBaseline = "alphabetic";
+    g.font = font(700, 92, false);
+    g.fillStyle = "#f6f1e6";
+    g.fillText("磁带失真", 88, 366);
+
+    g.font = font(600, 21, true);
+    g.fillStyle = "rgba(240,226,196,.86)";
+    if ("letterSpacing" in g) g.letterSpacing = "3px";
+    g.fillText("TAPE 19 · 1998-07-19", 88, 410);
+    if ("letterSpacing" in g) g.letterSpacing = "0px";
+
+    /* 左上 REC */
+    g.fillStyle = "#ff3b46";
+    g.beginPath(); g.arc(97, 85, 7.5, 0, 6.2832); g.fill();
+    g.font = font(700, 22, true);
+    g.fillStyle = "#f6f1e6";
+    if ("letterSpacing" in g) g.letterSpacing = "2px";
+    g.fillText("REC", 114, 93);
+    if ("letterSpacing" in g) g.letterSpacing = "0px";
+
+    /* 右上模式标 */
+    g.textAlign = "right";
+    g.font = font(700, 20, true);
+    g.fillStyle = "rgba(198,216,244,.80)";
+    g.fillText("VHS · SP", 1192, 93);
+    g.textAlign = "left";
+  })();
+
+  /* ---------- 每帧会变的 HUD（画进 canvas，不走 DOM 文本） ---------- */
+  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+  function drawHud(g, t, syncEnv) {
+    var lost = syncEnv > 0.25;
+    var f = Math.max(0, Math.min(FRAMES - 1, Math.round(t * FPS)));
+    var tc = pad2(Math.floor(f / (FPS * 3600))) + ":" +
+             pad2(Math.floor(f / (FPS * 60)) % 60) + ":" +
+             pad2(Math.floor(f / FPS) % 60) + ":" + pad2(f % FPS);
+
+    g.textAlign = "right"; g.textBaseline = "alphabetic";
+    g.font = font(700, 20, true);
+    g.fillStyle = lost ? "#ff3b46" : "#7fe3d0";
+    if ("letterSpacing" in g) g.letterSpacing = "3px";
+    g.fillText(lost ? "TRACKING LOST" : "TRACKING OK", 1192, 606);
+
+    g.font = font(700, 34, true);
+    g.fillStyle = "#f6f1e6";
+    if ("letterSpacing" in g) g.letterSpacing = "2px";
+    g.fillText(tc, 1192, 648);
+    if ("letterSpacing" in g) g.letterSpacing = "0px";
+    g.textAlign = "left";
+  }
+
+  /* ---------- 画布与上下文 ---------- */
+  var vis = document.getElementById("v");
+  var vctx = vis.getContext("2d");
+  var SRC = mkCanvas(W, H), sctx = SRC.getContext("2d");
+  var CHR = mkCanvas(W, H), CHG = mkCanvas(W, H), CHB = mkCanvas(W, H);
+  var chr = CHR.getContext("2d"), chg = CHG.getContext("2d"), chb = CHB.getContext("2d");
+  var CH = [CHR, CHG, CHB], CHX = [chr, chg, chb];
+  var TINT = ["#ff0000", "#00ff00", "#0000ff"];
+
+  /* 通道分离：整幅图 → 只留 R / G / B 三张平面。
+     等价于三份克隆层，但后面可以逐扫描线各走各的位移。 */
+  function splitChannels() {
+    for (var c = 0; c < 3; c++) {
+      var g = CHX[c];
+      g.globalCompositeOperation = "source-over";
+      g.drawImage(SRC, 0, 0);
+      g.globalCompositeOperation = "multiply";
+      g.fillStyle = TINT[c];
+      g.fillRect(0, 0, W, H);
+    }
+  }
+
+  /* ---------- 主绘制 ---------- */
+  window.reelDraw = function (t) {
+    /* --- 每帧只算一次的量：全部是 t 的纯函数 --- */
+    var q = Math.floor(t * QHZ);                    // 时间量子
+    var ramp = span(t, 0.18, 0.55);                 // 起手 0.18s 内不抖 → t=0 是完整静态壳
+    var bp = ((t * BSPEED) % BPERIOD) + BOFF;       // 噪声带顶边（取模相位，不累加）
+    var E = [], syncEnv = 0, i;
+    for (i = 0; i < BEATS.length; i++) { E[i] = envAt(t, BEATS[i]); syncEnv += E[i]; }
+    syncEnv = clamp(syncEnv, 0, 1);
+
+    /* --- 合成 SRC：底图 + 颗粒 + 磁头噪声带 + 亮度抖 + HUD --- */
+    sctx.globalCompositeOperation = "source-over";
+    sctx.globalAlpha = 1;
+    sctx.drawImage(BG, 0, 0);
+
+    sctx.globalAlpha = 0.10 + 0.20 * syncEnv;
+    sctx.drawImage(GRAIN[q % GRAIN.length], 0, 0, W, H);
+
+    if (syncEnv > 0.01) {
+      sctx.globalAlpha = 1;
+      sctx.fillStyle = "rgba(214,236,255," + (0.10 * syncEnv).toFixed(3) + ")";
+      sctx.fillRect(0, 0, W, H);
+    }
+
+    sctx.globalAlpha = 0.94;
+    sctx.drawImage(BANDT[q % BANDT.length], 0, 0, W, BH, 0, bp, W, BH);
+    sctx.globalAlpha = 1;
+
+    drawHud(sctx, t, syncEnv);
+
+    /* --- 三通道各自独立位移 --- */
+    splitChannels();
+
+    /* --- 逐扫描线合成：720 行，每行按 dx(y,t) 单独位移 --- */
+    var cag = CAG0 + CAG1 * syncEnv;
+    vctx.globalCompositeOperation = "source-over";
+    vctx.fillStyle = "#000";
+    vctx.fillRect(0, 0, W, H);
+    vctx.globalCompositeOperation = "lighter";     // 加色 = mix-blend-mode: screen
+    vctx.imageSmoothingEnabled = true;
+    vctx.imageSmoothingQuality = "medium";
+
+    for (var y = 0; y < H; y++) {
+      /* ★ 闭式三项相加，一次算完，没有任何累加器 */
+      var dx = termJ(y, q, ramp) + termH(y, bp, q) + termK(y, q, E);
+
+      /* ★ 色散方向必须与 dx 同号：
+         sep>0 时 R 比亮度更往右、B 更往左；dx<0 时反过来。
+         sep = CA0 + cag·s，s = dx/DXMAX 是有符号的 —— 所以位移越大、
+         越往哪个方向，色散就越往那个方向拉。若用固定方向的色散（sep 恒正），
+         不管线条往哪跑，红边永远在同一侧，眼睛立刻读成「一层彩色膜贴在画上」，
+         而不是「三个通道被同一次失同步拽散了」。 */
+      var s = clamp(dx / DXMAX, -1, 1);
+      var sep = CA0 + cag * s;
+      var dR = dx + sep, dG = dx, dB = dx - sep;
+
+      drawWrapped(CHR, y, dR);
+      drawWrapped(CHG, y, dG);
+      drawWrapped(CHB, y, dB);
+    }
+  };
+
+  /* 逐行画一条扫描线，并对画布外的那一段做水平环绕。
+     三个通道都必须环绕：只环绕 G 的话，被位移"拽出去"的那一侧会整段丢掉 R 和 B ——
+     实测 t=4.48（最强一次失同步）右边缘有 67/720 行只剩 G，渲成一条 ~40px 宽的纯绿竖条，
+     读起来像渲染错误而不是磁带瑕疵。
+     环绕之后边缘不再缺通道，色散仍然完整存在 —— 它体现在 R / G / B 三张平面
+     彼此错开 1~16px，所以画面内部的字形边缘、地平线、山脊上都能看到红/青描边。 */
+  function drawWrapped(src, y, d) {
+    vctx.drawImage(src, 0, y, W, 1, d, y, W, 1);
+    var k;
+    if (d > 0.5) {
+      k = Math.ceil(d);
+      vctx.drawImage(src, W - k, y, k, 1, 0, y, k, 1);
+    } else if (d < -0.5) {
+      k = Math.ceil(-d);
+      vctx.drawImage(src, 0, y, k, 1, W - k, y, k, 1);
+    }
+  }
+
+  window.reelDraw(0);
+})();
+</script>
+</body>
+</html>
