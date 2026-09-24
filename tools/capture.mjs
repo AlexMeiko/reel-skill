@@ -3,7 +3,7 @@
  * Reel capture: seekable HTML → PNG sequence → MP4 via Chromium CDP + ffmpeg.
  * Zero npm deps. Needs a Chromium-based browser and ffmpeg.
  *
- * Full export (one scene, optional parallel browsers for THIS scene only):
+ * Full export (one scene, parallel headless windows sharing browsers):
  *   node capture.mjs scene.html --out out.mp4 --qa-dir qa [--jobs N]
  * Key-node stills before a long export:
  *   node capture.mjs scene.html --probe --qa-dir probe
@@ -75,17 +75,25 @@ function report(payload) {
 
 function die(msg, code = 1) {
   report({ phase: "error", message: String(msg).slice(0, 300) });
-  console.error(msg);
-  process.exit(code);
+  const err = new Error(msg);
+  err.reelExit = code;
+  err.reelReported = true;
+  throw err;
 }
 
-const JOBS_MAX = 8;
+const WINDOWS_PER_BROWSER = 4;
 
 function defaultJobs() {
   const env = Number(process.env.REEL_JOBS);
-  if (env > 0) return Math.max(1, Math.min(JOBS_MAX, Math.floor(env)));
+  if (env > 0) return Math.max(1, Math.floor(env));
   const n = cpus() && cpus().length ? cpus().length : 2;
-  return Math.max(1, Math.min(JOBS_MAX, n));
+  return Math.max(1, n);
+}
+
+function defaultBrowsers(jobs) {
+  const env = Number(process.env.REEL_BROWSERS);
+  if (env > 0) return Math.max(1, Math.min(jobs, Math.floor(env)));
+  return Math.max(1, Math.ceil(jobs / WINDOWS_PER_BROWSER));
 }
 
 function parseTimes(s) {
@@ -114,9 +122,7 @@ function parseArgs(argv) {
     crf: 14,
     probe: false,
     jobs: defaultJobs(),
-    worker: false,
-    startFrame: 0,
-    frameCount: null,
+    browsers: null,
     at: null,
     qaAt: null,
     fromMp4: null,
@@ -141,22 +147,20 @@ function parseArgs(argv) {
     else if (a === "--edge" || a === "--browser") args.edge = next();
     else if (a === "--timeout") args.timeout = Number(next());
     else if (a === "--crf") args.crf = Number(next());
-    // Internal: workers get the parent's whole arg set, so new render flags cannot be forgotten.
-    else if (a === "--args-json") Object.assign(args, JSON.parse(next()));
     else if (a === "--probe") args.probe = true;
     else if (a === "--at") args.at = (args.at || []).concat(parseTimes(next()));
     else if (a === "--qa-at") args.qaAt = (args.qaAt || []).concat(parseTimes(next()));
     else if (a === "--from-mp4") args.fromMp4 = next();
     else if (a === "--no-sandbox") args.noSandbox = true;
-    else if (a === "--jobs") args.jobs = Math.max(1, Math.min(JOBS_MAX, Number(next()) || 1));
-    else if (a === "--worker") args.worker = true;
-    else if (a === "--start-frame") args.startFrame = Number(next());
-    else if (a === "--frame-count") args.frameCount = Number(next());
+    else if (a === "--jobs") args.jobs = Math.max(1, Number(next()) || 1);
+    else if (a === "--browsers") args.browsers = Math.max(1, Number(next()) || 1);
     else if (a === "-h" || a === "--help") args.help = true;
     else if (a.startsWith("-")) die("unknown flag " + a);
     else rest.push(a);
   }
   args.input = rest[0];
+  if (args.browsers == null) args.browsers = defaultBrowsers(args.jobs);
+  else args.browsers = Math.max(1, Math.min(args.browsers, args.jobs));
   return args;
 }
 
@@ -194,7 +198,7 @@ class Cdp {
       const msg = JSON.parse(typeof ev.data === "string" ? ev.data : ev.data.toString());
       if (msg.method) {
         const fns = this.handlers.get(msg.method);
-        if (fns) for (const fn of fns) fn(msg.params || {});
+        if (fns) for (const fn of fns) fn(msg.params || {}, msg.sessionId);
       }
       if (msg.id != null && this.pending.has(msg.id)) {
         const { resolve, reject } = this.pending.get(msg.id);
@@ -233,18 +237,20 @@ class Cdp {
       });
     });
   }
-  wait(method, timeout = 15000) {
+  wait(method, timeout = 15000, sessionId) {
     return new Promise((resolve, reject) => {
+      const remove = () => {
+        const list = this.handlers.get(method) || [];
+        this.handlers.set(method, list.filter((x) => x !== fn));
+      };
       const timer = setTimeout(() => {
+        remove();
         reject(new Error("wait timeout: " + method));
       }, timeout);
-      const fn = (params) => {
+      const fn = (params, eventSessionId) => {
+        if (sessionId && eventSessionId !== sessionId) return;
         clearTimeout(timer);
-        const list = this.handlers.get(method) || [];
-        this.handlers.set(
-          method,
-          list.filter((x) => x !== fn)
-        );
+        remove();
         resolve(params);
       };
       this.on(method, fn);
@@ -359,6 +365,9 @@ function chromeFlags(args) {
     "--disable-component-update",
     "--mute-audio",
     "--hide-scrollbars",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
     "--force-device-scale-factor=1",
     "--remote-debugging-port=0",
   ];
@@ -376,7 +385,26 @@ function chromeFlags(args) {
   return flags;
 }
 
-async function launchBrowser(htmlPath, args, fn) {
+async function openPage(root, htmlPath, args) {
+  const created = await root.send("Target.createTarget", { url: "about:blank", newWindow: true });
+  const { sessionId } = await root.send("Target.attachToTarget", {
+    targetId: created.targetId,
+    flatten: true,
+  });
+  const page = {
+    send: (method, params) => root.send(method, params, { session: sessionId }),
+    wait: (method, timeout) => root.wait(method, timeout, sessionId),
+  };
+  await page.send("Page.enable");
+  await page.send("Runtime.enable");
+  const loaded = page.wait("Page.loadEventFired", args.timeout);
+  await page.send("Page.navigate", { url: pathToFileURL(htmlPath).href });
+  await loaded;
+  await evaluate(page, "document.fonts && document.fonts.ready ? document.fonts.ready.then(()=>true) : true");
+  return page;
+}
+
+async function startBrowser(args) {
   const edge = whichEdge(args.edge);
   const work = mkdtempSync(join(tmpdir(), "reel-"));
   const profile = join(work, "profile");
@@ -386,33 +414,13 @@ async function launchBrowser(htmlPath, args, fn) {
     [...chromeFlags(args), "--user-data-dir=" + profile, "about:blank"],
     { stdio: ["ignore", "pipe", "pipe"], detached: true }
   );
-  let ws;
-  try {
-    const devtools = await waitDevtoolsUrl(proc, args.timeout);
-    ws = await openWs(devtools);
-    const cdp = new Cdp(ws);
-    const created = await cdp.send(
-      "Target.createTarget",
-      { url: "about:blank" },
-      { session: false }
-    );
-    const attached = await cdp.send(
-      "Target.attachToTarget",
-      { targetId: created.targetId, flatten: true },
-      { session: false }
-    );
-    cdp.sessionId = attached.sessionId;
-    await cdp.send("Page.enable");
-    await cdp.send("Runtime.enable");
-    const loaded = cdp.wait("Page.loadEventFired", args.timeout);
-    await cdp.send("Page.navigate", { url: pathToFileURL(htmlPath).href });
-    await loaded;
-    await evaluate(
-      cdp,
-      "document.fonts && document.fonts.ready ? document.fonts.ready.then(()=>true) : true"
-    );
-    return await fn(cdp);
-  } finally {
+  let ws, cdp;
+  const close = async () => {
+    try {
+      if (cdp && ws.readyState === WebSocket.OPEN) {
+        await cdp.send("Browser.close", {}, { timeout: 1000 });
+      }
+    } catch {}
     try {
       if (ws && ws.readyState === WebSocket.OPEN) ws.close();
     } catch {}
@@ -421,19 +429,28 @@ async function launchBrowser(htmlPath, args, fn) {
     try {
       rmSync(work, { recursive: true, force: true });
     } catch {}
+  };
+  try {
+    const devtools = await waitDevtoolsUrl(proc, args.timeout);
+    ws = await openWs(devtools);
+    cdp = new Cdp(ws);
+    return { cdp, close };
+  } catch (err) {
+    await close();
+    if (/DevTools URL/.test(err.message) && !args.noSandbox) {
+      console.error("[reel] 浏览器启动失败，改用 --no-sandbox --disable-dev-shm-usage 重试一次");
+      return startBrowser({ ...args, noSandbox: true, forceDevShm: true });
+    }
+    throw err;
   }
 }
 
 async function withBrowser(htmlPath, args, fn) {
+  const browser = await startBrowser(args);
   try {
-    return await launchBrowser(htmlPath, args, fn);
-  } catch (err) {
-    const msg = err && err.message ? err.message : String(err);
-    if (/DevTools URL/.test(msg) && !args.noSandbox) {
-      console.error("[reel] 浏览器启动失败，改用 --no-sandbox --disable-dev-shm-usage 重试一次");
-      return await launchBrowser(htmlPath, { ...args, noSandbox: true, forceDevShm: true }, fn);
-    }
-    throw err;
+    return await fn(await openPage(browser.cdp, htmlPath, args));
+  } finally {
+    await browser.close();
   }
 }
 
@@ -524,6 +541,7 @@ async function screenshotAt(cdp, t) {
     format: "png",
     captureBeyondViewport: false,
     fromSurface: true,
+    optimizeForSpeed: true,
   });
   if (!shot.data) throw new Error("empty screenshot at t=" + t);
   return Buffer.from(shot.data, "base64");
@@ -717,33 +735,6 @@ async function captureRange(cdp, framesDir, start, count, fps, duration, onFrame
   }
 }
 
-function spawnWorker(script, htmlPath, args, start, count, framesDir) {
-  return new Promise((resolveP, reject) => {
-    const childArgs = [
-      script,
-      htmlPath,
-      "--args-json",
-      JSON.stringify(args),
-      "--worker",
-      "--start-frame",
-      String(start),
-      "--frame-count",
-      String(count),
-      "--frames-dir",
-      framesDir,
-    ];
-    const p = spawn(process.execPath, childArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    let err = "";
-    p.stderr.on("data", (c) => {
-      err += c.toString();
-    });
-    p.on("close", (code) => {
-      if (code === 0) resolveP();
-      else reject(new Error("worker " + start + " exited " + code + "\n" + err.slice(-1500)));
-    });
-  });
-}
-
 async function probeScene(htmlPath, args, reelFromParent) {
   const qaDir = args.qaDir ? resolve(args.qaDir) : join(dirname(htmlPath), "probe");
   mkdirSync(qaDir, { recursive: true });
@@ -791,20 +782,6 @@ async function probeScene(htmlPath, args, reelFromParent) {
     console.log(JSON.stringify({ ...manifest, dir: qaDir }, null, 2));
     return manifest;
   });
-}
-
-async function workerMain(htmlPath, args) {
-  const framesDir = resolve(args.framesDir);
-  mkdirSync(framesDir, { recursive: true });
-  await withBrowser(htmlPath, args, async (cdp) => {
-    const reel = await readReel(cdp, args);
-    await preparePage(cdp, reel, htmlPath);
-    const start = args.startFrame || 0;
-    const count = args.frameCount;
-    if (!(count > 0)) die("worker needs --frame-count");
-    await captureRange(cdp, framesDir, start, count, reel.fps, reel.duration);
-  });
-  console.log(JSON.stringify({ ok: true, worker: true, start: args.startFrame, count: args.frameCount }));
 }
 
 function assertMp4(outPath) {
@@ -878,60 +855,81 @@ async function exportScene(htmlPath, args) {
         );
       });
     } else {
-      reel = await withBrowser(htmlPath, args, async (cdp) => {
-        const r = await readReel(cdp, args);
-        await preparePage(cdp, r, htmlPath);
-        return r;
-      });
-      total = Math.max(2, Math.round(reel.duration * reel.fps));
-      jobs = Math.max(1, Math.min(jobs, total));
-      report({
-        phase: "capture",
-        scene: sceneRel,
-        current: 0,
-        total,
-        t: 0,
-        fps: reel.fps,
-        duration: reel.duration,
-        width: reel.width,
-        height: reel.height,
-        message: "开始截帧 0/" + total + " ×" + jobs,
-      });
-      const script = fileURLToPath(import.meta.url);
-      const chunk = Math.ceil(total / jobs);
-      const slices = [];
-      for (let j = 0; j < jobs; j++) {
-        const start = j * chunk;
-        if (start >= total) break;
-        const count = Math.min(chunk, total - start);
-        slices.push({ start, count });
-      }
-      const timer = setInterval(() => {
-        let n = 0;
-        try {
-          n = readdirSync(framesDir).filter((f) => f.endsWith(".png")).length;
-        } catch {}
+      const started = [];
+      try {
+        const firstBrowser = await startBrowser(args);
+        started.push(firstBrowser);
+        const first = await openPage(firstBrowser.cdp, htmlPath, args);
+        const r = await readReel(first, args);
+        await preparePage(first, r, htmlPath);
+        total = Math.max(2, Math.round(r.duration * r.fps));
+        jobs = Math.max(1, Math.min(jobs, total));
+        const browserCount = Math.max(1, Math.min(args.browsers, jobs));
+        for (let b = 1; b < browserCount; b++) started.push(await startBrowser(args));
+        const chunk = Math.ceil(total / jobs);
+        const slices = [];
+        for (let j = 0; j < jobs; j++) {
+          const start = j * chunk;
+          if (start >= total) break;
+          slices.push({ start, count: Math.min(chunk, total - start) });
+        }
+        const pages = [];
+        for (let i = 0; i < slices.length; i++) {
+          const root = started[i % started.length].cdp;
+          if (i === 0) {
+            pages.push(first);
+            continue;
+          }
+          const page = await openPage(root, htmlPath, args);
+          await preparePage(page, r, htmlPath);
+          pages.push(page);
+        }
         report({
           phase: "capture",
           scene: sceneRel,
-          current: n,
+          current: 0,
           total,
-          fps: reel.fps,
-          duration: reel.duration,
-          width: reel.width,
-          height: reel.height,
-          message: "截帧 " + n + "/" + total + " ×" + slices.length,
+          t: 0,
+          fps: r.fps,
+          duration: r.duration,
+          width: r.width,
+          height: r.height,
+          message: "开始截帧 0/" + total + " ×" + pages.length + " 页",
         });
-      }, 400);
-      try {
-        await Promise.all(
-          slices.map((s) => spawnWorker(script, htmlPath, args, s.start, s.count, framesDir))
-        );
+        const timer = setInterval(() => {
+          let n = 0;
+          try {
+            n = readdirSync(framesDir).filter((f) => f.endsWith(".png")).length;
+          } catch {}
+          report({
+            phase: "capture",
+            scene: sceneRel,
+            current: n,
+            total,
+            fps: r.fps,
+            duration: r.duration,
+            width: r.width,
+            height: r.height,
+            message: "截帧 " + n + "/" + total + " ×" + pages.length + " 页",
+          });
+        }, 400);
+        try {
+          await Promise.all(
+            slices.map((s, i) =>
+              captureRange(pages[i], framesDir, s.start, s.count, r.fps, r.duration, (idx, t, buf) =>
+                tickFrame(idx, t, buf, total, r)
+              )
+            )
+          );
+        } finally {
+          clearInterval(timer);
+        }
+        const have = readdirSync(framesDir).filter((f) => f.endsWith(".png")).length;
+        if (have < total) die("parallel capture missing frames: " + have + "/" + total);
+        reel = r;
       } finally {
-        clearInterval(timer);
+        for (const s of started) await s.close();
       }
-      const have = readdirSync(framesDir).filter((f) => f.endsWith(".png")).length;
-      if (have < total) die("parallel capture missing frames: " + have + "/" + total);
     }
 
     report({
@@ -1023,15 +1021,15 @@ async function main() {
   --at S[,S…]  live HTML stills at these seconds (SEGMENT time, 0 → REEL.duration), no MP4
   --from-mp4 F extract stills from a finished MP4 (ffmpeg; use for final QA)
   --qa-at S[,S…]  override QA sample times (segment time for export; whole-film time for --from-mp4)
-  --jobs N     parallel browsers slicing THIS scene (default = CPU count, max ${JOBS_MAX})
+  --jobs N     parallel headless windows (default = CPU count)
+  --browsers N browser processes (default = ceil(jobs/4), at least 1, not more than jobs)
   --crf N      x264 quality, lower is better (default 14)
   --fps overrides window.REEL.fps
   --width --height change the viewport only; they do not scale .stage
   --timeout N  page-load timeout in ms (default 20000)
   --duration must match window.REEL.duration; a mismatch is an error, not a trim
   --out must be a .mp4 path
-  --browser PATH  --no-sandbox  --frames-dir DIR  --keep-frames
-  --start-frame / --frame-count are internal (worker slices), do not use directly`);
+  --browser PATH  --no-sandbox  --frames-dir DIR  --keep-frames`);
     process.exit(args.help ? 0 : 64);
   }
   if (args.fromMp4) {
@@ -1042,12 +1040,6 @@ async function main() {
   }
   const htmlPath = resolve(args.input);
   if (!existsSync(htmlPath)) die("html not found: " + htmlPath);
-  if (args.worker) {
-    if (!args.framesDir) die("worker needs --frames-dir");
-    progressDir = resolve(args.framesDir);
-    await workerMain(htmlPath, args);
-    return;
-  }
   if (args.at && args.at.length) {
     progressDir = args.qaDir ? resolve(args.qaDir) : dirname(htmlPath);
     mkdirSync(progressDir, { recursive: true });
@@ -1060,7 +1052,7 @@ async function main() {
     await probeScene(htmlPath, args);
     return;
   }
-  if (!args.out && !args.worker) {
+  if (!args.out) {
     args.out = join(dirname(htmlPath), "out.mp4");
   }
   await exportScene(htmlPath, args);
@@ -1068,7 +1060,7 @@ async function main() {
 
 main().catch((err) => {
   const message = err && err.message ? err.message : String(err);
-  report({ phase: "error", message: message.slice(0, 300) });
+  if (!err.reelReported) report({ phase: "error", message: message.slice(0, 300) });
   console.error(err && err.stack ? err.stack : String(err));
-  process.exit(1);
+  process.exit(err.reelExit || 1);
 });

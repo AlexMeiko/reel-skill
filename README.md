@@ -68,10 +68,9 @@ node tools/panel.mjs --dir "$PWD/reel-out" --port 8766
 node tools/capture.mjs "$PWD/reel-out/part-01.html" --probe --qa-dir "$PWD/reel-out/part-01-probe"
 
 # 全量导出，单段也打满核
-JOBS=$(nproc); [ "$JOBS" -gt 8 ] && JOBS=8
 node tools/capture.mjs "$PWD/reel-out/part-01.html" \
   --out "$PWD/reel-out/part-01.mp4" \
-  --qa-dir "$PWD/reel-out/part-01-qa" --jobs "$JOBS"
+  --qa-dir "$PWD/reel-out/part-01-qa" --jobs "$(nproc)"
 
 # 只看某一秒
 node tools/capture.mjs "$PWD/reel-out/part-01.html" --at 20.5 --qa-dir "$PWD/reel-out/part-01-shots"
@@ -88,6 +87,8 @@ node tools/capture.mjs --from-mp4 reel-out/scene.mp4 --qa-dir reel-out/scene-qa 
 ```
 
 容器 / root 下浏览器起不来时，`capture.mjs` 会自动加 `--no-sandbox --disable-dev-shm-usage`；也可手动 `--no-sandbox` 或 `REEL_CHROME_FLAGS`。
+
+`--jobs` 就是并行窗口数，默认等于 CPU 核数，不要开过核数。浏览器默认按每个 4 个窗口来开（8 核就是 2 个浏览器 / 8 个窗口，16 核就是 4 / 16）；可用 `--browsers N` 改这个数，不超过窗口数。
 
 ## 产物
 
