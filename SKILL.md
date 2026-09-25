@@ -62,8 +62,8 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
    - 时长不限。拆不拆段、在哪拆由你定（写进 knowledge.md）。
 9. 时间轴定了再写 `part-01.html`（单段可叫 `scene.html`）。数字用字面量数组。后段抄 knowledge 的皮和上一段结束态。认输入用完整文件名，不要把 draft、备份扫进正片，并回显读到了哪些文件。
 10. 先探针再全量：`capture.mjs "$PWD/reel-out/part-01.html" --probe --qa-dir "$PWD/reel-out/part-01-probe"`，读图 + `probe.json`。只看某一秒用 `--at 20.5`，抽帧也写进 `reel-out/`。
-11. 全量导出，单段也打满核：`--jobs $(nproc)`。`--jobs` 就是并行窗口数，不要超过核数。默认每个浏览器 4 个窗口（8 核就是 2 个浏览器 / 8 个窗口）。导出后读 `qa-*.png` + `qa.json`。这一段画面不对，只改这一段再导，最多 3 轮。总时长、章节、字幕或 `gbar.json` 变了，烧进画面的段都要重导。画面互不依赖、且这些全局量已定的段可以同时导出。
-12. 多段 concat，再 `mux.mjs` 混音（不要 `--burn`）。配音在这一步收成单声道，并归一到 -18.7 LUFS、真峰值 -1.5 dBTP。不要把单声道复制成左右声道后再交付。真立体声才加 `--keep-stereo`。
+11. 全量导出，单段也打满核：`--jobs $(nproc)`。`--jobs` 就是并行窗口数，不要超过核数。默认每个浏览器 4 个窗口（8 核就是 2 个浏览器 / 8 个窗口）。帧写在 `--out` 所在目录的 `.frames-*`，不在 `/tmp`。导出后读 `qa-*.png` + `qa.json`。这一段画面不对，只改这一段再导，最多 3 轮。总时长、章节、字幕或 `gbar.json` 变了，烧进画面的段都要重导。画面互不依赖、且这些全局量已定的段可以同时导出。
+12. 多段 concat，再 `mux.mjs` 混音（不要 `--burn`）。配音在这一步收成单声道、48 kHz，并归一到 -18.7 LUFS、真峰值 -1.5 dBTP。不要把单声道复制成左右声道后再交付。真立体声才加 `--keep-stereo`。
 13. 成片抽帧终检（不可省，含各段衔接点）：接缝、gbar 是否连续、字幕、末帧。
 14. 封面两张，和成片同一套皮，各自重排，不要把 16:9 裁成 3:4。
     - `cover-16x9.html`：1920×1080。`cover-3x4.html`：1080×1440。
@@ -75,7 +75,7 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 
 输出**一个**自包含 HTML：
 
-1. `window.REEL = { duration, fps, width, height, offset? }`。有配音时 `duration` 抄 timeline 末句 + ~0.4s；宽高偶数。`offset` 是写进页面的字面量，等于前面各段时长之和；前面变了，后面的 HTML 和 MP4 一起过期。
+1. `window.REEL = { duration, fps, width, height, offset? }`。有配音时 `duration` 等于该段 `timeline.json` 的 `duration`，末句留白已经在里面，不要再加 0.4 秒；宽高偶数。`offset` 是写进页面的字面量，等于前面各段时长之和；前面变了，后面的 HTML 和 MP4 一起过期。
 2. 画面在 `.stage`，尺寸 = width×height，不用 `vw/vh`。`width/height` 就是成片像素，没有倍率；`.stage` 必须等于它。模板里的 1280×720 只是默认画布。文件名不影响分辨率。`--width` / `--height` 只改视口，不会把舞台放大。
 3. 运动只能来自 CSS/WAAPI（`fill: both`，禁 `infinite`）、`reelDraw(t)`、`reelSeek(t)`。口播走 srt；进度条走 `gbar.json` + `REEL.offset`（要么不用），不要手画，不要 `REEL.chapters`。
 4. 禁 `Date.now()` / `performance.now()` / 无时钟 rAF。rAF 只读 `window.__reelTime`。
@@ -92,7 +92,8 @@ reel-out/cover-3x4.html/.png   3:4 封面（如抖音）
 
 | 看什么 | 失败就改 |
 |---|---|
-| 首帧是空舞台或完整壳，不是散件 | 壳内元素必须是壳的子节点，跟壳一起出现 |
+| 首帧是空舞台或完整壳，不是散件 | 壳内元素必须是壳的子节点，跟壳一起出现。第 0 拍不要写成 `Math.max(0, t - LEAD)`，否则正文还在淡入；要 `t = 0` 时已经到位，起点用负数。接缝只在成片抽帧里看 |
+| 内容顶死上沿，或压进字幕 / 进度条 | 安全区自己留。不要顶死上沿，也不要压进字幕和进度条 |
 | 数字/条/游标同一时刻一致 | 只在 `reelDraw(t)` 算一次进度，别 CSS 动条、JS 动数字 |
 | 同一元素同一帧只写一次 | 多段区间打同一个元素时先逐帧取极值再写一次；顺序赋值会盖掉前面的区间 |
 | 口播和画面同一意群 | 换句不必换图；换图时口播已讲到这一层 |

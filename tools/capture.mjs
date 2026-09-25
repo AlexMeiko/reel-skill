@@ -19,6 +19,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
   mkdtempSync,
@@ -41,6 +42,10 @@ const PANEL_CANDIDATES = [
 
 let progressDir = null;
 let lastPanelPost = 0;
+let framesDrop = null;
+const liveProcs = new Set();
+const liveBrowsers = new Set();
+const liveCdps = new Set();
 function progressPaths() {
   const dir = progressDir || join(process.cwd(), "reel-out");
   return {
@@ -256,6 +261,13 @@ class Cdp {
       this.on(method, fn);
     });
   }
+  failAll(err) {
+    for (const item of this.pending.values()) item.reject(err);
+    this.pending.clear();
+    try {
+      this.ws.close();
+    } catch {}
+  }
 }
 
 async function waitDevtoolsUrl(proc, timeoutMs) {
@@ -318,15 +330,136 @@ async function evaluate(cdp, expression, extra = {}) {
 function run(cmd, args) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    liveProcs.add(p);
     let err = "";
     p.stderr.on("data", (c) => {
       err += c.toString();
     });
+    const done = () => liveProcs.delete(p);
+    p.on("error", (e) => {
+      done();
+      reject(e);
+    });
     p.on("close", (code) => {
+      done();
       if (code === 0) resolve();
       else reject(new Error(cmd + " exited " + code + "\n" + err));
     });
   });
+}
+
+function ffprobeJson(argv) {
+  return new Promise((resolveP, reject) => {
+    const p = spawn("ffprobe", argv, { stdio: ["ignore", "pipe", "pipe"] });
+    liveProcs.add(p);
+    let out = "";
+    let err = "";
+    p.stdout.on("data", (c) => {
+      out += c.toString();
+    });
+    p.stderr.on("data", (c) => {
+      err += c.toString();
+    });
+    const done = () => liveProcs.delete(p);
+    p.on("error", (e) => {
+      done();
+      reject(e);
+    });
+    p.on("close", (code) => {
+      done();
+      if (code !== 0) {
+        reject(new Error("ffprobe exited " + code + "\n" + err.slice(-500)));
+        return;
+      }
+      try {
+        resolveP(JSON.parse(out));
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+}
+
+async function encodedVideo(file) {
+  const parsed = await ffprobeJson([
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=nb_frames,duration",
+    "-of",
+    "json",
+    file,
+  ]);
+  const stream = parsed.streams && parsed.streams[0];
+  if (!stream) throw new Error("ffprobe found no video stream in " + file);
+  let frames = Number(stream.nb_frames);
+  let duration = Number(stream.duration);
+  if (!Number.isFinite(frames)) {
+    const counted = await ffprobeJson([
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-count_frames",
+      "-show_entries",
+      "stream=nb_read_frames,duration",
+      "-of",
+      "json",
+      file,
+    ]);
+    const again = counted.streams && counted.streams[0];
+    frames = Number(again && again.nb_read_frames);
+    if (!Number.isFinite(duration)) duration = Number(again && again.duration);
+  }
+  return { frames, duration };
+}
+
+async function assertEncoded(file, total, fps) {
+  let got;
+  try {
+    got = await encodedVideo(file);
+  } catch (err) {
+    die(err && err.message ? err.message : String(err));
+  }
+  const expected = total / fps;
+  if (got.frames !== total || !Number.isFinite(got.duration) || Math.abs(got.duration - expected) > 0.02) {
+    die(
+      "mp4 is " +
+        got.frames +
+        " frames / " +
+        got.duration +
+        "s, expected " +
+        total +
+        " frames / " +
+        expected.toFixed(3) +
+        "s"
+    );
+  }
+}
+
+let stopping = false;
+function installStop() {
+  const onSig = () => {
+    if (stopping) {
+      process.exit(1);
+      return;
+    }
+    stopping = true;
+    console.error("[reel] interrupted");
+    if (framesDrop) framesDrop();
+    const err = new Error("interrupted");
+    for (const c of liveCdps) c.failAll(err);
+    for (const p of liveProcs) {
+      try {
+        p.kill("SIGTERM");
+      } catch {}
+    }
+    for (const p of liveBrowsers) killProc(p);
+  };
+  process.on("SIGINT", onSig);
+  process.on("SIGTERM", onSig);
 }
 
 function killProc(proc) {
@@ -414,8 +547,11 @@ async function startBrowser(args) {
     [...chromeFlags(args), "--user-data-dir=" + profile, "about:blank"],
     { stdio: ["ignore", "pipe", "pipe"], detached: true }
   );
+  liveBrowsers.add(proc);
   let ws, cdp;
   const close = async () => {
+    liveBrowsers.delete(proc);
+    liveCdps.delete(cdp);
     try {
       if (cdp && ws.readyState === WebSocket.OPEN) {
         await cdp.send("Browser.close", {}, { timeout: 1000 });
@@ -434,6 +570,7 @@ async function startBrowser(args) {
     const devtools = await waitDevtoolsUrl(proc, args.timeout);
     ws = await openWs(devtools);
     cdp = new Cdp(ws);
+    liveCdps.add(cdp);
     return { cdp, close };
   } catch (err) {
     await close();
@@ -804,9 +941,15 @@ async function exportScene(htmlPath, args) {
   ensureDir(dirname(outPath), "output dir");
   ensureDir(args.qaDir ? resolve(args.qaDir) : join(dirname(outPath), "qa"), "qa dir");
   progressDir = dirname(outPath);
-  const work = mkdtempSync(join(tmpdir(), "reel-frames-"));
-  const framesDir = args.framesDir ? resolve(args.framesDir) : join(work, "frames");
+  const ownedFrames = args.framesDir ? null : mkdtempSync(join(dirname(outPath), ".frames-"));
+  const framesDir = args.framesDir ? resolve(args.framesDir) : ownedFrames;
   mkdirSync(framesDir, { recursive: true });
+  framesDrop = () => {
+    if (args.keepFrames || args.framesDir || !ownedFrames) return;
+    try {
+      rmSync(ownedFrames, { recursive: true, force: true });
+    } catch {}
+  };
   const sceneRel = fileUrl(htmlPath, progressDir).replace(/^\/file\//, "");
   let reel;
   let total = 0;
@@ -941,22 +1084,33 @@ async function exportScene(htmlPath, args) {
       duration: reel.duration,
       message: "ffmpeg 合成中",
     });
-    await run("ffmpeg", [
-      "-y",
-      "-framerate",
-      String(reel.fps),
-      "-i",
-      join(framesDir, "%06d.png"),
-      "-c:v",
-      "libx264",
-      "-pix_fmt",
-      "yuv420p",
-      "-crf",
-      String(args.crf),
-      "-movflags",
-      "+faststart",
-      outPath,
-    ]);
+    const tempMp4 = join(dirname(outPath), "." + basename(outPath, ".mp4") + ".partial.mp4");
+    try {
+      await run("ffmpeg", [
+        "-y",
+        "-framerate",
+        String(reel.fps),
+        "-i",
+        join(framesDir, "%06d.png"),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-crf",
+        String(args.crf),
+        "-movflags",
+        "+faststart",
+        tempMp4,
+      ]);
+      await assertEncoded(tempMp4, total, reel.fps);
+      renameSync(tempMp4, outPath);
+    } catch (err) {
+      try {
+        rmSync(tempMp4, { force: true });
+      } catch {}
+      if (err && err.reelExit) throw err;
+      die(err && err.message ? err.message : String(err));
+    }
 
     const qaDir = args.qaDir ? resolve(args.qaDir) : join(dirname(outPath), "qa");
     const qa = [];
@@ -1000,15 +1154,13 @@ async function exportScene(htmlPath, args) {
     });
     console.log(JSON.stringify(result, null, 2));
   } finally {
-    if (!args.keepFrames && !args.framesDir) {
-      try {
-        rmSync(work, { recursive: true, force: true });
-      } catch {}
-    }
+    if (framesDrop) framesDrop();
+    framesDrop = null;
   }
 }
 
 async function main() {
+  installStop();
   const args = parseArgs(process.argv.slice(2));
   if (args.help || (!args.input && !args.fromMp4)) {
     console.log(`Usage:

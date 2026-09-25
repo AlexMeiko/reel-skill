@@ -73,7 +73,15 @@ function isGlobalCaption(file) {
   return /(?:^|\/)(?:captions\.srt|timeline\.json)$/.test(file);
 }
 
+function isCoverHtml(htmlPath) {
+  return basename(htmlPath || "").replace(/\.html$/i, "").startsWith("cover-");
+}
+
 export function loadCuesForHtml(htmlPath, offset) {
+  if (isCoverHtml(htmlPath)) {
+    console.error("[reel] cover: skip captions and gbar");
+    return { cues: [], file: null, error: null };
+  }
   const stem = basename(htmlPath).replace(/\.html$/i, "");
   for (const p of captionSidecars(htmlPath)) {
     const cues = readCues(p);
@@ -98,6 +106,7 @@ export function loadCuesForHtml(htmlPath, offset) {
 }
 
 export function loadGbarForHtml(htmlPath) {
+  if (isCoverHtml(htmlPath)) return { file: null, total: 0, chapters: [] };
   const dir = dirname(htmlPath);
   const stem = basename(htmlPath).replace(/\.html$/i, "");
   const paths = [join(dir, stem + ".gbar.json"), join(dir, "gbar.json")];

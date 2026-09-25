@@ -9,8 +9,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 function die(msg, code = 1) {
   console.error(msg);
@@ -81,6 +81,52 @@ function probeDuration(file) {
   });
 }
 
+function probeAudio(file) {
+  return new Promise((resolveP, reject) => {
+    const p = spawn(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=sample_rate,channels",
+        "-of",
+        "json",
+        file,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] }
+    );
+    let out = "";
+    let err = "";
+    p.stdout.on("data", (c) => (out += c.toString()));
+    p.stderr.on("data", (c) => (err += c.toString()));
+    p.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error("ffprobe failed on " + file + "\n" + err.slice(-500)));
+        return;
+      }
+      let stream;
+      try {
+        const parsed = JSON.parse(out);
+        stream = parsed.streams && parsed.streams[0];
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      if (!stream) {
+        reject(new Error("ffprobe found no audio stream in " + file));
+        return;
+      }
+      resolveP({
+        sampleRate: Number(stream.sample_rate),
+        channels: Number(stream.channels),
+      });
+    });
+  });
+}
+
 function subtitlesFilter(abs) {
   const escaped = resolve(abs).replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
   return "subtitles=" + escaped;
@@ -90,7 +136,7 @@ const args = parseArgs(process.argv.slice(2));
 if (args.help || !args.video || !args.out) {
   console.log(`Usage: node mux.mjs --video scene.mp4 [--audio full-mix.wav] --out scene-vo.mp4
   captions already live in the video from capture
-  voice is downmixed to mono and normalized to -18.7 LUFS (TP -1.5). Override with --lufs, or --keep-stereo
+  voice is downmixed to mono, 48 kHz, and normalized to -18.7 LUFS (TP -1.5). Override with --lufs, or --keep-stereo
   --burn --subs file.srt   optional ffmpeg/libass overlay
   --soft --subs file.srt   optional mov_text track`);
   process.exit(args.help ? 0 : 64);
@@ -125,7 +171,7 @@ if (audio) {
   const chain = args.keepStereo
     ? "loudnorm=I=" + args.lufs + ":TP=-1.5:LRA=11"
     : "aformat=channel_layouts=mono,loudnorm=I=" + args.lufs + ":TP=-1.5:LRA=11";
-  ff.push("-af", chain, "-c:a", "aac", "-b:a", "192k");
+  ff.push("-af", chain, "-c:a", "aac", "-b:a", "192k", "-ar", "48000");
   if (!args.keepStereo) ff.push("-ac", "1");
 }
 if (subs && args.soft) ff.push("-c:s", "mov_text", "-metadata:s:s:0", "language=chi");
@@ -142,11 +188,45 @@ if (audio) {
     );
   }
 }
-ff.push("-movflags", "+faststart", outPath);
+const partial = join(dirname(outPath), "." + basename(outPath, ".mp4") + ".partial.mp4");
+ff.push("-movflags", "+faststart", partial);
+
+function dropPartial() {
+  try {
+    rmSync(partial, { force: true });
+  } catch {}
+}
 
 try {
   await run("ffmpeg", ff);
 } catch (err) {
+  dropPartial();
+  die(err && err.message ? err.message : String(err));
+}
+if (audio) {
+  let info;
+  try {
+    info = await probeAudio(partial);
+  } catch (err) {
+    dropPartial();
+    die(err && err.message ? err.message : String(err));
+  }
+  if (info.sampleRate !== 48000 || (!args.keepStereo && info.channels !== 1)) {
+    dropPartial();
+    die(
+      "audio is " +
+        info.sampleRate +
+        " Hz, " +
+        info.channels +
+        " ch; want 48000 Hz" +
+        (args.keepStereo ? "" : " mono")
+    );
+  }
+}
+try {
+  renameSync(partial, outPath);
+} catch (err) {
+  dropPartial();
   die(err && err.message ? err.message : String(err));
 }
 console.log(

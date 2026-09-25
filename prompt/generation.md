@@ -103,7 +103,7 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 
 ## 时间怎么写
 
-把片子想成一条 0→duration 的轴；有配音时轴来自 timeline，每一镜头只做一件视觉事。
+把片子想成一条 0→duration 的轴；有配音时轴来自 timeline，每一镜头只做一件视觉事。有配音时 `REEL.duration` 等于该段 `timeline.json` 的 `duration`，不要按末句再加 0.4 秒。段首第 0 拍不要写成 `Math.max(0, t - LEAD)`；要 `t = 0` 时这一拍已经到位，起点用负数。内容不要顶死上沿，也不要压进字幕和进度条，安全区自己留。
 
 | 手段 | 用来 | 写法 |
 |---|---|---|
@@ -134,7 +134,7 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 
 ### 短指标 / UI 演示（4–8 秒）
 
-0.0–0.4s 空镜或完整静态壳，避免首帧就是高潮；主体一段；最后 0.4s 静止结束帧。
+0.0–0.4s 空镜或完整静态壳，避免首帧就是高潮；主体一段；最后 0.4s 静止结束帧。这是无配音时的节奏，不是 duration 的算法。
 
 ### 数据折线（按季 / 按月）
 
@@ -148,7 +148,7 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 
 ### 概念 / 流程 / 架构讲解
 
-- `duration` 抄 timeline 末句出点 + 结束静帧；时长不限，拆不拆段自己定。
+- `duration` 等于该段 `timeline.json` 的 `duration`（末句留白已经含在里面），不要再加 0.4 秒。时长不限，拆不拆段自己定。
 - 台词稿定稿后 TTS 量时再出 srt，不要抄进 HTML。用语像对人讲话：有主语、有停顿、有「所以 / 也就是说」。
 - 用 SVG / DOM 示意图，不要把解说全文堆在画面中央。
 - 底栏用 kit + `gbar.json`，不要手画。
@@ -177,3 +177,5 @@ window.REEL = { duration: 22, fps: 30, width: 1280, height: 720, offset: 52.1 };
 - 配色按题材定。examples / mechanics 合用就沿用，不合用再换；定下来的写进 knowledge.md
 - 多段时每段 HTML 的底/字/强调色与 knowledge.md 一致
 - 封面是 1920×1080 与 1080×1440 两张 PNG，无进度条、字幕、时长
+- 有配音时 duration 等于 timeline.json 的 duration；第 0 拍在 t=0 已经到位
+- 内容不顶死上沿，不压进字幕和进度条
